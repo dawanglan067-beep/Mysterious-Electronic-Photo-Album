@@ -1,0 +1,41 @@
+# Qt 编译生成文件
+build/
+*.pro.user
+*.pro.user.*
+*.qbs.user
+*.qbs.user.*
+*.moc
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+ui_*.h
+Makefile*
+*.obj
+*.o
+*.exe
+*.dll
+*.lib
+*.exp
+*.pdb
+*.ilk
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+
+# Qt Creator
+*.autosave
+.qtcreator/
+
+# 临时脚本（不需要上传）
+gen.ps1
+gen_icons.ps1
+gen_missing.ps1
+
+# 参考项目（不需要上传）
+Electronic-photo-album-main/

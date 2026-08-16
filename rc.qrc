@@ -1,0 +1,71 @@
+<RCC>
+    <qresource prefix="/">
+        <!-- 方向箭头 -->
+        <file>icon/left.png</file>
+        <file>icon/left_hover.png</file>
+        <file>icon/left_press.png</file>
+        <file>icon/right.png</file>
+        <file>icon/right_hover.png</file>
+        <file>icon/right_press.png</file>
+        <file>icon/up.png</file>
+        <file>icon/up_hover.png</file>
+        <file>icon/up_press.png</file>
+        <file>icon/down.png</file>
+        <file>icon/down_hover.png</file>
+        <file>icon/down_press.png</file>
+        <file>icon/previous.png</file>
+        <file>icon/previous_hover.png</file>
+        <file>icon/previous_press.png</file>
+        <file>icon/next.png</file>
+        <file>icon/next_hover.png</file>
+        <file>icon/next_press.png</file>
+        <!-- 播放控制 -->
+        <file>icon/play.png</file>
+        <file>icon/play_hover.png</file>
+        <file>icon/play_press.png</file>
+        <file>icon/pause.png</file>
+        <file>icon/pause_hover.png</file>
+        <file>icon/pause_press.png</file>
+        <file>icon/close.png</file>
+        <file>icon/close_hover.png</file>
+        <file>icon/close_press.png</file>
+        <file>icon/closeshow.png</file>
+        <file>icon/closeshow_hover.png</file>
+        <file>icon/closeshow_press.png</file>
+        <!-- 功能图标 -->
+        <file>icon/createpro.png</file>
+        <file>icon/openpro.png</file>
+        <file>icon/openpro_hover.png</file>
+        <file>icon/openpro_press.png</file>
+        <file>icon/newpro.png</file>
+        <file>icon/newpro_hover.png</file>
+        <file>icon/newpro_press.png</file>
+        <file>icon/remove.png</file>
+        <file>icon/remove_hover.png</file>
+        <file>icon/remove_press.png</file>
+        <file>icon/import.png</file>
+        <file>icon/import_hover.png</file>
+        <file>icon/import_press.png</file>
+        <file>icon/setting.png</file>
+        <file>icon/setting_hover.png</file>
+        <file>icon/setting_press.png</file>
+        <file>icon/slideshow.png</file>
+        <file>icon/slideshow_hover.png</file>
+        <file>icon/slideshow_press.png</file>
+        <file>icon/dir.png</file>
+        <file>icon/core.png</file>
+        <file>icon/music.png</file>
+        <file>icon/bulm.png</file>
+        <file>icon/bulm.ico</file>
+        <!-- 目录树/菜单用图 -->
+        <file>photo/OIP.jpg</file>
+        <file alias="photo/OIP (1).jpg">photo/OIP (1).jpg</file>
+        <file>photo/7a96a759b1e628c15d2992e8da2bebf.jpg</file>
+        <file>photo/e38198c26dc52b95a224af050b0951e.jpg</file>
+        <file>photo/1daeb62f494e3a0f040ea34c18cd41f.jpg</file>
+        <!-- 背景音乐 -->
+        <file>music/bandicam 2025-04-13 14-51-23-941.mp3</file>
+        <!-- 样式表 -->
+        <file>style/style.qss</file>
+    </qresource>
+</RCC>
