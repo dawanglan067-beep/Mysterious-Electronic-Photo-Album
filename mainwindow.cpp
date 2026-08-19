@@ -50,8 +50,10 @@ void MainWindow::SlotCreatePro(bool checked)
     auto *page=wizard.page(0);
     page->setTitle(tr("设置项目配置"));
     //连接信号和槽,把项目配置传回来
+    connect(&wizard,&Wizard::SigProSettings,dynamic_cast<ProTree*>(_protree),&ProTree::AddProToTree);
+
     wizard.show();
     wizard.exec();
     //断开所有信号
-
+    disconnect();
 }

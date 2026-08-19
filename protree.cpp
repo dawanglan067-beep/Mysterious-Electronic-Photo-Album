@@ -14,3 +14,9 @@ ProTree::~ProTree()
 {
     delete ui;
 }
+
+void ProTree::AddProToTree(const QString name, const QString path)
+{
+    ui->treeWidget->AddProToTree(name,path);
+
+}

@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.19)
 project(Album LANGUAGES CXX)
 
+set(CMAKE_AUTORCC ON)
+
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets)
 
 qt_standard_project_setup()
@@ -18,6 +20,8 @@ qt_add_executable(Album
     comfirmpage.h comfirmpage.cpp comfirmpage.ui
     protree.h protree.cpp protree.ui
     protreewidget.h protreewidget.cpp
+    protreeitem.h protreeitem.cpp
+    const.h
 )
 
 target_link_libraries(Album

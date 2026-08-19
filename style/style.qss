@@ -89,6 +89,7 @@ QTreeWidget::item:selected {
     background: rgb(38,95,153);
 }
 
+
 /*
 QTreeWidget::branch:open:has-children:!has-siblings,
 QTreeWidget::branch:open:has-children:has-siblings
@@ -96,7 +97,8 @@ QTreeWidget::branch:open:has-children:has-siblings
 
 QTreeWidget::branch:closed:has-children:!has-siblings,
 QTreeWidget::branch:closed:has-children:has-siblings
-{image:url(qrc:/photo/f10e7d721918671061847808f9b1a5c.jpg);}*/
+{image:url(qrc:/photo/f10e7d721918671061847808f9b1a5c.jpg);}
+*/
 
 
 PicShow {

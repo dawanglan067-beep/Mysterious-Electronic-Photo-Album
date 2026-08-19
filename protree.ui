@@ -24,7 +24,7 @@
       </widget>
      </item>
      <item>
-      <widget class="QTreeWidget" name="treeWidget">
+      <widget class="ProTreeWidget" name="treeWidget">
        <column>
         <property name="text">
          <string notr="true">1</string>
@@ -36,6 +36,13 @@
    </item>
   </layout>
  </widget>
+ <customwidgets>
+  <customwidget>
+   <class>ProTreeWidget</class>
+   <extends>QTreeWidget</extends>
+   <header>protreewidget.h</header>
+  </customwidget>
+ </customwidgets>
  <resources/>
  <connections/>
 </ui>
