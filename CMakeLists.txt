@@ -12,12 +12,23 @@ qt_add_executable(Album
     mainwindow.h
     mainwindow.ui
     rc.qrc
+    app.rc
+    wizard.h wizard.cpp wizard.ui
+    prosetpage.h prosetpage.cpp prosetpage.ui
+    comfirmpage.h comfirmpage.cpp comfirmpage.ui
+    protree.h protree.cpp protree.ui
+    protreewidget.h protreewidget.cpp
 )
 
 target_link_libraries(Album
     PRIVATE
         Qt::Core
         Qt::Widgets
+)
+
+target_include_directories(Album
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 include(GNUInstallDirs)

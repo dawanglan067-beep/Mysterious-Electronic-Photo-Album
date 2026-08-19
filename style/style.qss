@@ -24,14 +24,37 @@ QMenu::item:selected {
     background-color: rgb(39,96,154 ); /* 选中时背景 */
 }
 
-/*创建*/
-QWizard{
-    color:rgb(231,231,231);
-    background-color:rgb(46,47,48);
+/* 创建相册向导样式：确保背景与文字颜色严格成对绑定 */
+QWizard {
+    background-color: rgb(46,47,48);
+    color: rgb(231,231,231);
 }
 
-QWizard QLable#tips{
-    color:red;
+/* 向导页及其子页面容器背景与字体 */
+QWizard QWizardPage, QWizard ProSetPage, QWizard ComfirmPage {
+    background-color: rgb(46,47,48);
+    color: rgb(231,231,231);
+}
+
+/* 向导内所有文本标签 */
+QWizard QLabel {
+    background-color: transparent;
+    color: rgb(231,231,231);
+}
+
+/* 提示红字：使用多重选择器确保精准生效 */
+#tips, QLabel#tips, QWizard QLabel#tips {
+    background-color: transparent;
+    color: rgb(255,80,80);
+}
+
+/* 输入框 */
+QWizard QLineEdit {
+    background-color: rgb(67,67,70);
+    color: rgb(231,231,231);
+    border: 1px solid rgb(120,120,120);
+    border-radius: 3px;
+    padding: 3px 5px;
 }
 
 ProTree {

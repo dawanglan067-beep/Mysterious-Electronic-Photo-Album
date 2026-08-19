@@ -33,7 +33,7 @@
        <number>0</number>
       </property>
       <item>
-       <layout class="QVBoxLayout" name="picLayout">
+       <layout class="QVBoxLayout" name="proLayout">
         <property name="spacing">
          <number>7</number>
         </property>
@@ -52,7 +52,7 @@
        </layout>
       </item>
       <item>
-       <layout class="QVBoxLayout" name="proLyout">
+       <layout class="QVBoxLayout" name="picLayout">
         <property name="spacing">
          <number>7</number>
         </property>

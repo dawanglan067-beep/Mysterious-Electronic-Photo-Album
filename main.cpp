@@ -2,6 +2,7 @@
 
 #include <QApplication>
 #include <QFile>
+#include <QDebug>
 
 int main(int argc, char *argv[])
 {
@@ -10,13 +11,11 @@ int main(int argc, char *argv[])
     // 加载 QSS 深色主题样式
     QFile qss(":/style/style.qss");
     if (qss.open(QFile::ReadOnly)) {
+        qDebug() << "Open qss success!";
         a.setStyleSheet(QString::fromUtf8(qss.readAll()));
         qss.close();
-    }
-    else
-    {
-        qDebug()<<"(Open qss filed)";
-        return 0;
+    } else {
+        qDebug() << "Open qss failed, using default style.";
     }
 
     MainWindow w;
