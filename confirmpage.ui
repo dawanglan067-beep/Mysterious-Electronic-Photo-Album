@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
- <class>ComfirmPage</class>
- <widget class="QWizardPage" name="ComfirmPage">
+ <class>ConfirmPage</class>
+ <widget class="QWizardPage" name="ConfirmPage">
   <property name="geometry">
    <rect>
     <x>0</x>

@@ -16,11 +16,16 @@ class MainWindow : public QMainWindow
 public:
     MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
-
+protected:
+    virtual void resizeEvent(QResizeEvent*event);
 private:
     Ui::MainWindow *ui;
     QWidget *_protree;
+    QWidget*_picshow;
 private slots:
     void SlotCreatePro(bool checked);
+    void SlotOpenPro(bool);
+signals:
+    void SigOpenPro(const QString &path);
 };
 #endif // MAINWINDOW_H

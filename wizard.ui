@@ -14,7 +14,7 @@
    <string>Wizard</string>
   </property>
   <widget class="ProSetPage" name="wizardPage1"/>
-  <widget class="ComfirmPage" name="wizardPage2"/>
+  <widget class="ConfirmPage" name="wizardPage2"/>
  </widget>
  <customwidgets>
   <customwidget>
@@ -24,9 +24,9 @@
    <container>1</container>
   </customwidget>
   <customwidget>
-   <class>ComfirmPage</class>
+   <class>ConfirmPage</class>
    <extends>QWizardPage</extends>
-   <header>comfirmpage.h</header>
+   <header>confirmpage.h</header>
    <container>1</container>
   </customwidget>
  </customwidgets>

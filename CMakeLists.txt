@@ -3,7 +3,8 @@ project(Album LANGUAGES CXX)
 
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets Multimedia)
+
 
 qt_standard_project_setup()
 
@@ -17,17 +18,28 @@ qt_add_executable(Album
     app.rc
     wizard.h wizard.cpp wizard.ui
     prosetpage.h prosetpage.cpp prosetpage.ui
-    comfirmpage.h comfirmpage.cpp comfirmpage.ui
+    confirmpage.h confirmpage.cpp confirmpage.ui
     protree.h protree.cpp protree.ui
     protreewidget.h protreewidget.cpp
     protreeitem.h protreeitem.cpp
     const.h
+    protreethread.h protreethread.cpp
+    removeprodialog.h removeprodialog.cpp removeprodialog.ui
+    opentreethread.h opentreethread.cpp
+    picshow.h picshow.cpp picshow.ui
+    picbtn.h picbtn.cpp
+    slideshowdlg.h slideshowdlg.cpp slideshowdlg.ui
+    picstatebtn.h picstatebtn.cpp
+    picanimationwid.h picanimationwid.cpp
+    prolistwid.h prolistwid.cpp
+    prelistitem.h prelistitem.cpp
 )
 
 target_link_libraries(Album
     PRIVATE
         Qt::Core
         Qt::Widgets
+         Qt::Multimedia
 )
 
 target_include_directories(Album

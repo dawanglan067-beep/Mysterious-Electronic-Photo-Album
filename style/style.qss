@@ -31,7 +31,7 @@ QWizard {
 }
 
 /* 向导页及其子页面容器背景与字体 */
-QWizard QWizardPage, QWizard ProSetPage, QWizard ComfirmPage {
+QWizard QWizardPage, QWizard ProSetPage, QWizard ConfirmPage {
     background-color: rgb(46,47,48);
     color: rgb(231,231,231);
 }
