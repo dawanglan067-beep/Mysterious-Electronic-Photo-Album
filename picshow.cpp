@@ -222,12 +222,12 @@ PicShow::PicShow(QWidget *parent)
     ui->label->setMouseTracking(true);
 
     // 初始化上一张/下一张按钮的图标（常规状态、悬停状态、按下状态）
-    ui->previousBtn->SetIcons(":/icon/previous.png",
-                              ":/icon/previous_hover.png",
-                              ":/icon/previous_press.png");
-    ui->nextBtn->SetIcons(":/icon/next.png",
-                          ":/icon/next_hover.png",
-                          ":/icon/next_press.png");
+    ui->previousBtn->SetIcons(":/icon/line/previous.svg",
+                              ":/icon/line/previous_hover.svg",
+                              ":/icon/line/previous_press.svg");
+    ui->nextBtn->SetIcons(":/icon/line/next.svg",
+                          ":/icon/line/next_hover.svg",
+                          ":/icon/line/next_press.svg");
 
     // 为上一张按钮设置图形透明度特效，初始透明度为 0（隐藏）
     QGraphicsOpacityEffect *opacity_pre = new QGraphicsOpacityEffect(this);
@@ -291,15 +291,33 @@ void PicShow::InitStudioUI()
         return btn;
     };
 
-    QPushButton *btnZoomOut = makeToolBtn("－", tr("缩小画布 (鼠标滚轮向下)"));
+    QPushButton *btnZoomOut = makeToolBtn("缩小", tr("缩小画布 (鼠标滚轮向下)"));
+    btnZoomOut->setIcon(QIcon(":/icon/line/zoomout.svg"));
+    btnZoomOut->setIconSize(QSize(20, 20));
     _btn_zoom_reset = makeToolBtn("100% 自适应", tr("点击重置为自适应窗口大小 (双击画布可切换)"));
-    QPushButton *btnZoomIn = makeToolBtn("＋", tr("放大画布 (鼠标滚轮向上)"));
+    _btn_zoom_reset->setIcon(QIcon(":/icon/line/fit.svg"));
+    _btn_zoom_reset->setIconSize(QSize(20, 20));
+    QPushButton *btnZoomIn = makeToolBtn("放大", tr("放大画布 (鼠标滚轮向上)"));
+    btnZoomIn->setIcon(QIcon(":/icon/line/zoomin.svg"));
+    btnZoomIn->setIconSize(QSize(20, 20));
     QPushButton *btnActual = makeToolBtn("1:1 原图", tr("按原始像素 1:1 比例显示"));
-    QPushButton *btnRotL = makeToolBtn("↺ 左旋", tr("逆时针旋转 90°"));
-    QPushButton *btnRotR = makeToolBtn("↻ 右旋", tr("顺时针旋转 90°"));
-    QPushButton *btnFlipH = makeToolBtn("⇄ 水平镜像", tr("水平左右镜像翻转"));
-    QPushButton *btnFlipV = makeToolBtn("⇅ 垂直镜像", tr("垂直上下镜像翻转"));
-    QPushButton *btnInfo = makeToolBtn("📊 直方图/算法工坊", tr("展开/收起右侧 RGB 直方图、图像元数据与算法滤镜工坊"));
+    btnActual->setIcon(QIcon(":/icon/line/fit.svg"));
+    btnActual->setIconSize(QSize(20, 20));
+    QPushButton *btnRotL = makeToolBtn("左旋", tr("逆时针旋转 90°"));
+    btnRotL->setIcon(QIcon(":/icon/line/rotateleft.svg"));
+    btnRotL->setIconSize(QSize(20, 20));
+    QPushButton *btnRotR = makeToolBtn("右旋", tr("顺时针旋转 90°"));
+    btnRotR->setIcon(QIcon(":/icon/line/rotateright.svg"));
+    btnRotR->setIconSize(QSize(20, 20));
+    QPushButton *btnFlipH = makeToolBtn("水平镜像", tr("水平左右镜像翻转"));
+    btnFlipH->setIcon(QIcon(":/icon/line/fliph.svg"));
+    btnFlipH->setIconSize(QSize(20, 20));
+    QPushButton *btnFlipV = makeToolBtn("垂直镜像", tr("垂直上下镜像翻转"));
+    btnFlipV->setIcon(QIcon(":/icon/line/flipv.svg"));
+    btnFlipV->setIconSize(QSize(20, 20));
+    QPushButton *btnInfo = makeToolBtn("直方图/算法工坊", tr("展开/收起右侧 RGB 直方图、图像元数据与算法滤镜工坊"));
+    btnInfo->setIcon(QIcon(":/icon/line/histogram.svg"));
+    btnInfo->setIconSize(QSize(20, 20));
     btnInfo->setCheckable(true);
     btnInfo->setChecked(true);
 
@@ -403,11 +421,15 @@ void PicShow::InitStudioUI()
 
     QHBoxLayout *algoBtnRow = new QHBoxLayout();
     algoBtnRow->setSpacing(6);
-    QPushButton *btnResetAlgo = new QPushButton(tr("🔄 还原参数"), _info_panel);
+    QPushButton *btnResetAlgo = new QPushButton(tr("还原参数"), _info_panel);
+    btnResetAlgo->setIcon(QIcon(":/icon/line/reset.svg"));
+    btnResetAlgo->setIconSize(QSize(20, 20));
     btnResetAlgo->setObjectName("canvasToolBtn");
     btnResetAlgo->setCursor(Qt::PointingHandCursor);
     btnResetAlgo->setMinimumHeight(26);
-    QPushButton *btnSaveImg = new QPushButton(tr("💾 导出图像"), _info_panel);
+    QPushButton *btnSaveImg = new QPushButton(tr("导出图像"), _info_panel);
+    btnSaveImg->setIcon(QIcon(":/icon/line/save.svg"));
+    btnSaveImg->setIconSize(QSize(20, 20));
     btnSaveImg->setObjectName("canvasToolBtn");
     btnSaveImg->setCursor(Qt::PointingHandCursor);
     btnSaveImg->setMinimumHeight(26);
@@ -453,7 +475,9 @@ void PicShow::InitStudioUI()
     metaGrid->setColumnStretch(1, 1);
     infoLayout->addLayout(metaGrid);
 
-    QPushButton *btnLocate = new QPushButton(tr("📂 在资源管理器中定位"), _info_panel);
+    QPushButton *btnLocate = new QPushButton(tr("在资源管理器中定位"), _info_panel);
+    btnLocate->setIcon(QIcon(":/icon/line/openpro.svg"));
+    btnLocate->setIconSize(QSize(20, 20));
     btnLocate->setObjectName("canvasToolBtn");
     btnLocate->setCursor(Qt::PointingHandCursor);
     btnLocate->setMinimumHeight(28);

@@ -18,6 +18,9 @@ PicStateBtn::~PicStateBtn()
 void PicStateBtn::SetIcons(const QString &normal, const QString &hover, const QString &pressed,
                            const QString &normal_2, const QString &hover_2, const QString &pressed_2)
 {
+    setIconSize(QSize(28, 28));
+    setMinimumSize(44, 44);
+    setCursor(Qt::PointingHandCursor);
     _normal = normal;
     _hover = hover;
     _pressed = pressed;
@@ -26,11 +29,7 @@ void PicStateBtn::SetIcons(const QString &normal, const QString &hover, const QS
     _pressed_2 = pressed_2;
 
     // 默认以状态1的正常图标作为初始显示
-    QPixmap tmpPixmap;
-    tmpPixmap.load(normal);
-    this->resize(tmpPixmap.size());
-    this->setIcon(tmpPixmap);
-    this->setIconSize(tmpPixmap.size());
+    setIcon(QIcon(normal));
     _cur_state = PicBtnStateNormal;
 }
 
@@ -123,27 +122,21 @@ bool PicStateBtn::event(QEvent *e)
 // 状态1 正常显示
 void PicStateBtn::setNormalIcon()
 {
-    QPixmap tmpPixmap;
-    tmpPixmap.load(_normal);
-    this->setIcon(tmpPixmap);
+    setIcon(QIcon(_normal));
     _cur_state = PicBtnStateNormal; // 记录状态为：状态1-正常
 }
 
 // 状态1 鼠标悬停高亮
 void PicStateBtn::setHoverIcon()
 {
-    QPixmap tmpPixmap;
-    tmpPixmap.load(_hover);
-    this->setIcon(tmpPixmap);
+    setIcon(QIcon(_hover));
     _cur_state = PicBtnStateHover;  // 记录状态为：状态1-悬浮
 }
 
 // 状态1 鼠标按下
 void PicStateBtn::setPressedIcon()
 {
-    QPixmap tmpPixmap;
-    tmpPixmap.load(_pressed);
-    this->setIcon(tmpPixmap);
+    setIcon(QIcon(_pressed));
     _cur_state = PicBtnStatePressed;// 记录状态为：状态1-按下
 }
 
@@ -152,27 +145,21 @@ void PicStateBtn::setPressedIcon()
 // 状态2 正常显示
 void PicStateBtn::setNormal2Icon()
 {
-    QPixmap tmpPixmap;
-    tmpPixmap.load(_normal_2);
-    this->setIcon(tmpPixmap);
+    setIcon(QIcon(_normal_2));
     _cur_state = PicBtnState2Normal; // 记录状态为：状态2-正常
 }
 
 // 状态2 鼠标悬停高亮
 void PicStateBtn::setHover2Icon()
 {
-    QPixmap tmpPixmap;
-    tmpPixmap.load(_hover_2);
-    this->setIcon(tmpPixmap);
+    setIcon(QIcon(_hover_2));
     _cur_state = PicBtnState2Hover;  // 记录状态为：状态2-悬浮
 }
 
 // 状态2 鼠标按下
 void PicStateBtn::setPressed2Icon()
 {
-    QPixmap tmpPixmap;
-    tmpPixmap.load(_pressed_2);
-    this->setIcon(tmpPixmap);
+    setIcon(QIcon(_pressed_2));
     _cur_state = PicBtnState2Pressed;// 记录状态为：状态2-按下
 }
 

@@ -41,11 +41,11 @@ void ApplyTreeItemIconsMainThread(QTreeWidgetItem *item)
     if (!item) return;
     if (item->type() == TreeItemDir || item->type() == TreeItemPro)
     {
-        item->setData(0, Qt::DecorationRole, QIcon(":/icon/dir.png"));
+        item->setData(0, Qt::DecorationRole, QIcon(item->type() == TreeItemPro ? ":/icon/line/album.svg" : ":/icon/line/dir.svg"));
     }
     else if (item->type() == TreeItemPic)
     {
-        item->setData(0, Qt::DecorationRole, QIcon(":/icon/core.png"));
+        item->setData(0, Qt::DecorationRole, QIcon(":/icon/line/core.svg"));
     }
     for (int i = 0; i < item->childCount(); ++i)
     {

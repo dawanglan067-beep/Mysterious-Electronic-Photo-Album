@@ -17,28 +17,28 @@ MainWindow::MainWindow(QWidget *parent)
     QMenu*menu_file=menuBar()->addMenu(tr("文件(&F)"));
 
     //创建项目
-    QAction*act_create_pro=new QAction(QIcon(":/icon/createpro.png"),tr("创建项目"),this);
+    QAction*act_create_pro=new QAction(QIcon(":/icon/line/createpro.svg"),tr("创建项目"),this);
     act_create_pro->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_N));
     menu_file->addAction(act_create_pro);
 
     //打开项目动作
-    QAction*act_open_pro=new QAction(QIcon(":/icon/openpro.png"),tr("打开项目"),this);
+    QAction*act_open_pro=new QAction(QIcon(":/icon/line/openpro.svg"),tr("打开项目"),this);
     act_open_pro->setShortcut(QKeySequence(Qt::CTRL|Qt::Key_O));
     menu_file->addAction(act_open_pro);
 
     //创建设置菜单
     QMenu*menu_set=menuBar()->addMenu(tr("设置(&S)"));
     //背景音乐控制与偏好设置中心
-    QAction*act_music=new QAction(QIcon(":/icon/music.png"),tr("🎵 背景音乐设置中心..."),this);
+    QAction*act_music=new QAction(QIcon(":/icon/line/music.svg"),tr("背景音乐设置中心..."),this);
     act_music->setShortcut(QKeySequence(Qt::CTRL|Qt::Key_M));
     menu_set->addAction(act_music);
 
     //快速选择音频文件
-    QAction*act_select_music=new QAction(QIcon(":/icon/import.png"),tr("📂 快速更换音乐文件..."),this);
+    QAction*act_select_music=new QAction(QIcon(":/icon/line/import.svg"),tr("快速更换音乐文件..."),this);
     menu_set->addAction(act_select_music);
 
     //一键播放/停止背景音乐
-    QAction*act_toggle_music=new QAction(QIcon(":/icon/play.png"),tr("▶️ 播放背景音乐"),this);
+    QAction*act_toggle_music=new QAction(QIcon(":/icon/line/play.svg"),tr("播放背景音乐"),this);
     act_toggle_music->setShortcut(QKeySequence(Qt::CTRL|Qt::Key_B));
     menu_set->addAction(act_toggle_music);
 
@@ -62,7 +62,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     //创建智能算法菜单（参赛亮点）
     QMenu*menu_algo=menuBar()->addMenu(tr("智能算法(&A)"));
-    QAction*act_dhash=new QAction(QIcon(":/icon/setting.png"),tr("感知哈希 (dHash) 相似照片查重"),this);
+    QAction*act_dhash=new QAction(QIcon(":/icon/line/duplicates.svg"),tr("感知哈希 (dHash) 相似照片查重"),this);
     act_dhash->setShortcut(QKeySequence(Qt::CTRL|Qt::Key_D));
     menu_algo->addAction(act_dhash);
 
@@ -89,8 +89,8 @@ MainWindow::MainWindow(QWidget *parent)
     connect(act_opt_slide_play,&QAction::toggled,pro_tree_widget,&ProTreeWidget::SetAutoPlayOnSlideshow);
     connect(act_opt_slide_stop,&QAction::toggled,pro_tree_widget,&ProTreeWidget::SetAutoStopOnSlideshowExit);
     connect(pro_tree_widget,&ProTreeWidget::SigMusicStateChanged,this,[this,pro_tree_widget,act_toggle_music](bool playing){
-        act_toggle_music->setText(playing ? tr("⏹️ 停止背景音乐") : tr("▶️ 播放背景音乐"));
-        act_toggle_music->setIcon(QIcon(playing ? ":/icon/pause.png" : ":/icon/play.png"));
+        act_toggle_music->setText(playing ? tr("停止背景音乐") : tr("播放背景音乐"));
+        act_toggle_music->setIcon(QIcon(playing ? ":/icon/line/stop.svg" : ":/icon/line/play.svg"));
         if (playing) {
             statusBar()->showMessage(tr("🎵 正在播放背景音乐：%1").arg(QFileInfo(pro_tree_widget->GetMusicPath()).fileName()), 5000);
         } else {

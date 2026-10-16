@@ -68,7 +68,7 @@
 ### 环境要求
 - **C++ 标准**：C++17 或更高
 - **Qt 版本**：Qt 6.5+ (推荐 Qt 6.5 ~ 6.8)
-- **必需 Qt 模块**：`Qt::Core`, `Qt::Widgets`, `Qt::Multimedia`
+- **必需 Qt 模块**：`Qt::Core`, `Qt::Widgets`, `Qt::Multimedia`, `Qt::Svg`
 - **构建工具**：CMake (3.19+) 或 Qt Creator
 
 ### 使用 CMake 命令行构建运行

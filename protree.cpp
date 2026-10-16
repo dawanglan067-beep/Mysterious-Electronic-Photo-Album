@@ -19,27 +19,33 @@ ProTree::ProTree(QWidget *parent)
     filterLayout->setSpacing(5);
 
     QLineEdit *searchEdit = new QLineEdit(filterBar);
-    searchEdit->setPlaceholderText(tr("🔍 搜索照片名称..."));
+    searchEdit->setPlaceholderText(tr("搜索照片名称..."));
     searchEdit->setClearButtonEnabled(true);
     searchEdit->setMinimumHeight(26);
     searchEdit->setStyleSheet(
         "QLineEdit { background-color: rgb(58,60,65); color: rgb(230,233,238); "
         "border: 1px solid rgb(95,98,105); border-radius: 4px; padding: 2px 6px; }");
 
-    QPushButton *btnFavFilter = new QPushButton(tr("⭐ 收藏"), filterBar);
+    QPushButton *btnFavFilter = new QPushButton(tr("收藏"), filterBar);
+    btnFavFilter->setIcon(QIcon(":/icon/line/favorite.svg"));
+    btnFavFilter->setIconSize(QSize(20, 20));
     btnFavFilter->setObjectName("canvasToolBtn");
     btnFavFilter->setToolTip(tr("仅显示打上星标收藏的照片 (右键图片可收藏)"));
     btnFavFilter->setCheckable(true);
     btnFavFilter->setCursor(Qt::PointingHandCursor);
     btnFavFilter->setMinimumHeight(26);
 
-    QPushButton *btnDupCheck = new QPushButton(tr("🧹 查重"), filterBar);
+    QPushButton *btnDupCheck = new QPushButton(tr("查重"), filterBar);
+    btnDupCheck->setIcon(QIcon(":/icon/line/duplicates.svg"));
+    btnDupCheck->setIconSize(QSize(20, 20));
     btnDupCheck->setObjectName("canvasToolBtn");
     btnDupCheck->setToolTip(tr("基于 64-bit 差异感知哈希 (dHash) 算法检测相册中的相似/重复照片"));
     btnDupCheck->setCursor(Qt::PointingHandCursor);
     btnDupCheck->setMinimumHeight(26);
 
-    QPushButton *btnMusicToggle = new QPushButton(tr("🎵 音乐"), filterBar);
+    QPushButton *btnMusicToggle = new QPushButton(tr("音乐"), filterBar);
+    btnMusicToggle->setIcon(QIcon(":/icon/line/music.svg"));
+    btnMusicToggle->setIconSize(QSize(20, 20));
     btnMusicToggle->setObjectName("canvasToolBtn");
     btnMusicToggle->setToolTip(tr("点击一键播放/停止背景音乐（按 Ctrl+M 打开背景音乐设置中心）"));
     btnMusicToggle->setCheckable(true);
@@ -60,7 +66,7 @@ ProTree::ProTree(QWidget *parent)
     connect(ui->treeWidget, &ProTreeWidget::SigMusicStateChanged, this, [btnMusicToggle](bool playing) {
         btnMusicToggle->blockSignals(true);
         btnMusicToggle->setChecked(playing);
-        btnMusicToggle->setText(playing ? tr("🎵 播放中") : tr("🎵 音乐"));
+        btnMusicToggle->setText(playing ? tr("播放中") : tr("音乐"));
         btnMusicToggle->blockSignals(false);
     });
 }

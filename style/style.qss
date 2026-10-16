@@ -169,7 +169,20 @@ QSlider::handle:horizontal {
 }
 
 #nextBtn,#previousBtn,#closeBtn,#playBtn,#slidepreBtn,#slidenextBtn,#slidpreBtn,#slidnextBtn {
-    border: 0px;
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    padding: 4px;
+}
+
+PicBtn:hover, PicStateBtn:hover {
+    background-color: rgb(48, 61, 77);
+    border-color: rgb(76, 101, 130);
+}
+
+PicBtn:pressed, PicStateBtn:pressed {
+    background-color: rgb(34, 51, 70);
+    border-color: rgb(83, 150, 216);
 }
 
 

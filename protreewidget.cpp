@@ -113,12 +113,12 @@ ProTreeWidget::ProTreeWidget(QWidget *parent): QTreeWidget(parent)
     this->setHeaderHidden(true);
     this->setIconSize(QSize(20, 20));
     connect(this,&ProTreeWidget::itemPressed,this,&ProTreeWidget::SlotItemPressed);
-    _action_import=new QAction(QIcon(":/icon/import.png"),tr("导入文件"),this);
-    _action_setstart=new QAction(QIcon(":/icon/core.png"),tr("设置活动项目"),this);
-    _action_closepro=new QAction(QIcon(":/icon/close.png"),tr("关闭项目"),this);
-    _action_slideshow=new QAction(QIcon(":/icon/slideshow.png"),tr("轮播图播放"),this);
-    _action_detect_dup=new QAction(QIcon(":/icon/setting.png"),tr("🧹 相似/重复照片检测 (dHash)"),this);
-    _action_toggle_fav=new QAction(QIcon(":/icon/core.png"),tr("⭐ 收藏/取消收藏该照片"),this);
+    _action_import=new QAction(QIcon(":/icon/line/import.svg"),tr("导入文件"),this);
+    _action_setstart=new QAction(QIcon(":/icon/line/active.svg"),tr("设置活动项目"),this);
+    _action_closepro=new QAction(QIcon(":/icon/line/close.svg"),tr("关闭项目"),this);
+    _action_slideshow=new QAction(QIcon(":/icon/line/slideshow.svg"),tr("轮播图播放"),this);
+    _action_detect_dup=new QAction(QIcon(":/icon/line/duplicates.svg"),tr("相似/重复照片检测 (dHash)"),this);
+    _action_toggle_fav=new QAction(QIcon(":/icon/line/favorite.svg"),tr("收藏/取消收藏该照片"),this);
 
     connect(_action_import,&QAction::triggered,this,&ProTreeWidget::SlotImport);
     connect(_action_setstart,&QAction::triggered,this,&ProTreeWidget::SlotSetAvtive);
@@ -150,6 +150,7 @@ ProTreeWidget::ProTreeWidget(QWidget *parent): QTreeWidget(parent)
 
     // 监听播放状态流转（确保跨音频工作线程安全排队到 GUI 主线程）
     connect(_player, &QMediaPlayer::playbackStateChanged, this, [this](QMediaPlayer::PlaybackState state) {
+        if (state == QMediaPlayer::PlayingState) _last_music_error.clear();
         emit SigMusicStateChanged(state == QMediaPlayer::PlayingState);
     }, Qt::QueuedConnection);
 
@@ -230,7 +231,7 @@ void ProTreeWidget::AddProToTree(const QString name, const QString path)
     // 杜绝 QTreeWidgetItem 构造时自动挂载一次、随后 addTopLevelItem 再次挂载导致同一节点指针在树中重复注册并引发双重释放/堆破坏！
     auto *item = new ProTreeItem(static_cast<QTreeWidget*>(nullptr), name, file_path, TreeItemPro);
     item->setData(0, Qt::DisplayRole, name);
-    item->setData(0, Qt::DecorationRole, QIcon(":/icon/dir.png"));
+    item->setData(0, Qt::DecorationRole, QIcon(":/icon/line/album.svg"));
     item->setData(0, Qt::ToolTipRole, file_path);
     this->addTopLevelItem(item);
 
@@ -289,7 +290,7 @@ void ProTreeWidget::SlotItemPressed(QTreeWidgetItem *item, int column)
             if (picItem)
             {
                 bool isFav = _favorite_paths.contains(picItem->GetPath());
-                _action_toggle_fav->setText(isFav ? tr("⭐ 取消星标收藏") : tr("⭐ 设为星标收藏"));
+                _action_toggle_fav->setText(isFav ? tr("取消星标收藏") : tr("设为星标收藏"));
                 menu.addAction(_action_toggle_fav);
                 menu.exec(QCursor::pos());
             }
@@ -1081,9 +1082,7 @@ bool ProTreeWidget::NativeMciPlay(const QString &filePath)
         wchar_t errBuf[256] = {0};
         mciGetErrorStringW(err, errBuf, 256);
         _last_music_error = tr("Windows 原生音频引擎打开失败: %1").arg(QString::fromWCharArray(errBuf));
-        qWarning() << "[NativeAudio]" << _last_music_error;
-        emit SigMusicErrorOccurred(_last_music_error);
-        emit SigMusicStateChanged(false);
+        qDebug() << "[NativeAudio]" << _last_music_error;
         return false;
     }
 
@@ -1104,9 +1103,7 @@ bool ProTreeWidget::NativeMciPlay(const QString &filePath)
         wchar_t errBuf[256] = {0};
         mciGetErrorStringW(err, errBuf, 256);
         _last_music_error = tr("Windows 原生音频引擎播放失败: %1").arg(QString::fromWCharArray(errBuf));
-        qWarning() << "[NativeAudio]" << _last_music_error;
-        emit SigMusicErrorOccurred(_last_music_error);
-        emit SigMusicStateChanged(false);
+        qDebug() << "[NativeAudio]" << _last_music_error;
         return false;
     }
 
@@ -1343,12 +1340,16 @@ void ProTreeWidget::SlotSetMusic()
     mainLayout->addWidget(lblCurrentTrack);
 
     QHBoxLayout *fileBtnRow = new QHBoxLayout();
-    QPushButton *btnChooseFile = new QPushButton(tr("📂 选择/更换音乐文件..."), &dlg);
+    QPushButton *btnChooseFile = new QPushButton(tr("选择/更换音乐文件..."), &dlg);
+    btnChooseFile->setIcon(QIcon(":/icon/line/openpro.svg"));
+    btnChooseFile->setIconSize(QSize(20, 20));
     btnChooseFile->setObjectName("canvasToolBtn");
     btnChooseFile->setCursor(Qt::PointingHandCursor);
     btnChooseFile->setMinimumHeight(30);
 
-    QPushButton *btnDefaultFile = new QPushButton(tr("🔄 恢复默认音乐 (高品质旋律)"), &dlg);
+    QPushButton *btnDefaultFile = new QPushButton(tr("恢复默认音乐 (高品质旋律)"), &dlg);
+    btnDefaultFile->setIcon(QIcon(":/icon/line/reset.svg"));
+    btnDefaultFile->setIconSize(QSize(20, 20));
     btnDefaultFile->setObjectName("canvasToolBtn");
     btnDefaultFile->setCursor(Qt::PointingHandCursor);
     btnDefaultFile->setMinimumHeight(30);
@@ -1368,17 +1369,23 @@ void ProTreeWidget::SlotSetMusic()
     mainLayout->addWidget(titleCtrl);
 
     QHBoxLayout *ctrlRow = new QHBoxLayout();
-    QPushButton *btnPlay = new QPushButton(tr("▶️ 立即播放"), &dlg);
+    QPushButton *btnPlay = new QPushButton(tr("立即播放"), &dlg);
+    btnPlay->setIcon(QIcon(":/icon/line/play.svg"));
+    btnPlay->setIconSize(QSize(20, 20));
     btnPlay->setObjectName("canvasToolBtn");
     btnPlay->setCursor(Qt::PointingHandCursor);
     btnPlay->setMinimumHeight(30);
 
-    QPushButton *btnPause = new QPushButton(tr("⏸️ 暂停"), &dlg);
+    QPushButton *btnPause = new QPushButton(tr("暂停"), &dlg);
+    btnPause->setIcon(QIcon(":/icon/line/pause.svg"));
+    btnPause->setIconSize(QSize(20, 20));
     btnPause->setObjectName("canvasToolBtn");
     btnPause->setCursor(Qt::PointingHandCursor);
     btnPause->setMinimumHeight(30);
 
-    QPushButton *btnStop = new QPushButton(tr("⏹️ 停止音乐"), &dlg);
+    QPushButton *btnStop = new QPushButton(tr("停止音乐"), &dlg);
+    btnStop->setIcon(QIcon(":/icon/line/stop.svg"));
+    btnStop->setIconSize(QSize(20, 20));
     btnStop->setObjectName("canvasToolBtn");
     btnStop->setCursor(Qt::PointingHandCursor);
     btnStop->setMinimumHeight(30);
@@ -1517,7 +1524,8 @@ void ProTreeWidget::SlotStartMusic()
     bool mciOk = NativeMciPlay(_music_path);
     if (!mciOk)
     {
-        qWarning() << "[MusicPlayer] Native MCI failed, trying QMediaPlayer fallback...";
+        qDebug() << "[MusicPlayer] Using QMediaPlayer fallback for" << _music_path;
+        _last_music_error.clear();
         if (_audio_output)
         {
             _audio_output->setMuted(false);
@@ -1613,7 +1621,8 @@ void ProTreeWidget::RefreshItemFavoriteDisplay(QTreeWidgetItem *item)
         {
             QFileInfo fi(picItem->GetPath());
             bool isFav = _favorite_paths.contains(picItem->GetPath());
-            item->setData(0, Qt::DisplayRole, isFav ? ("⭐ " + fi.fileName()) : fi.fileName());
+            item->setData(0, Qt::DisplayRole, fi.fileName());
+            item->setIcon(0, QIcon(isFav ? ":/icon/line/favorite.svg" : ":/icon/line/core.svg"));
         }
     }
     for (int i = 0; i < item->childCount(); ++i)
@@ -1966,7 +1975,9 @@ void ProTreeWidget::SlotDetectDuplicates()
 
     QHBoxLayout *btnLayout = new QHBoxLayout();
     btnLayout->addStretch();
-    QPushButton *btnClean = new QPushButton(tr("🗑️ 一键清理勾选的相似副本"), &dlg);
+    QPushButton *btnClean = new QPushButton(tr("一键清理勾选的相似副本"), &dlg);
+    btnClean->setIcon(QIcon(":/icon/line/remove.svg"));
+    btnClean->setIconSize(QSize(20, 20));
     btnClean->setObjectName("canvasToolBtn");
     btnClean->setMinimumHeight(32);
     QPushButton *btnClose = new QPushButton(tr("关闭"), &dlg);

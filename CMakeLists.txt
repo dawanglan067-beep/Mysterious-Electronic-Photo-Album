@@ -27,7 +27,7 @@ endif()
 
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets Multimedia)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets Multimedia Svg)
 
 
 qt_standard_project_setup()
@@ -64,6 +64,7 @@ target_link_libraries(Album
         Qt::Core
         Qt::Widgets
         Qt::Multimedia
+        Qt::Svg
         winmm
 )
 

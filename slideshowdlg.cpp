@@ -15,21 +15,21 @@ SlideShowDlg::SlideShowDlg(QWidget *parent, QTreeWidgetItem *first_item, QTreeWi
 {
     ui->setupUi(this);
     this->setWindowFlags(Qt::Dialog|Qt::FramelessWindowHint);
-    ui->slidepreBtn->SetIcons(":/icon/previous.png",
-                              ":/icon/previous_hover.png",
-                              ":/icon/previous_press.png");
-    ui->slidenextBtn->SetIcons(":/icon/next.png",
-                               ":/icon/next_hover.png",
-                               ":/icon/next_press.png");
-    ui->closeBtn->SetIcons(":/icon/closeshow.png",
-                           ":/icon/closeshow_hover.png",
-                           ":/icon/closeshow_press.png");
-    ui->playBtn->SetIcons(":/icon/play.png",
-                          ":/icon/play_hover.png",
-                          ":/icon/play_press.png",
-                          ":/icon/pause.png",
-                          ":/icon/pause_hover.png",
-                          ":/icon/pause_press.png");
+    ui->slidepreBtn->SetIcons(":/icon/line/previous.svg",
+                              ":/icon/line/previous_hover.svg",
+                              ":/icon/line/previous_press.svg");
+    ui->slidenextBtn->SetIcons(":/icon/line/next.svg",
+                               ":/icon/line/next_hover.svg",
+                               ":/icon/line/next_press.svg");
+    ui->closeBtn->SetIcons(":/icon/line/close.svg",
+                           ":/icon/line/close_hover.svg",
+                           ":/icon/line/close_press.svg");
+    ui->playBtn->SetIcons(":/icon/line/play.svg",
+                          ":/icon/line/play_hover.svg",
+                          ":/icon/line/play_press.svg",
+                          ":/icon/line/pause.svg",
+                          ":/icon/line/pause_hover.svg",
+                          ":/icon/line/pause_press.svg");
 
     auto *_protree_widget = dynamic_cast<ProTreeWidget*>(parent);
 
@@ -60,13 +60,17 @@ SlideShowDlg::SlideShowDlg(QWidget *parent, QTreeWidgetItem *first_item, QTreeWi
     comboSpeed->addItem("2.0x 极速", 2.0f);
     comboSpeed->setCurrentIndex(1);
 
-    QPushButton *btnLoop = new QPushButton(tr("🔁 循环轮播: 开启"), ctrlBar);
+    QPushButton *btnLoop = new QPushButton(tr("循环轮播: 开启"), ctrlBar);
+    btnLoop->setIcon(QIcon(":/icon/line/loop.svg"));
+    btnLoop->setIconSize(QSize(20, 20));
     btnLoop->setObjectName("canvasToolBtn");
     btnLoop->setCheckable(true);
     btnLoop->setChecked(true);
     btnLoop->setCursor(Qt::PointingHandCursor);
 
     QPushButton *btnMusic = new QPushButton(ctrlBar);
+    btnMusic->setIcon(QIcon(":/icon/line/music.svg"));
+    btnMusic->setIconSize(QSize(20, 20));
     btnMusic->setObjectName("canvasToolBtn");
     btnMusic->setCheckable(true);
     btnMusic->setCursor(Qt::PointingHandCursor);
@@ -76,17 +80,17 @@ SlideShowDlg::SlideShowDlg(QWidget *parent, QTreeWidgetItem *first_item, QTreeWi
         btnMusic->setChecked(playing);
         if (playing)
         {
-            btnMusic->setText(tr("🎵 音乐: 播放中"));
+            btnMusic->setText(tr("音乐: 播放中"));
             btnMusic->setToolTip(tr("点击停止背景音乐\n曲目: %1").arg(_protree_widget->GetMusicPath()));
         }
         else if (_protree_widget && !_protree_widget->GetLastMusicError().isEmpty())
         {
-            btnMusic->setText(tr("⚠️ 音乐: 异常"));
+            btnMusic->setText(tr("音乐: 异常"));
             btnMusic->setToolTip(tr("播放异常: %1\n点击尝试重新播放").arg(_protree_widget->GetLastMusicError()));
         }
         else
         {
-            btnMusic->setText(tr("🔇 音乐: 已停止"));
+            btnMusic->setText(tr("音乐: 已停止"));
             btnMusic->setToolTip(tr("点击开启背景音乐"));
         }
         btnMusic->blockSignals(false);
@@ -131,7 +135,7 @@ SlideShowDlg::SlideShowDlg(QWidget *parent, QTreeWidgetItem *first_item, QTreeWi
         ui->picanimation->SetSpeedMultiplier(mult);
     });
     connect(btnLoop, &QPushButton::toggled, this, [this, btnLoop](bool checked) {
-        btnLoop->setText(checked ? tr("🔁 循环轮播: 开启") : tr("🔁 循环轮播: 关闭"));
+        btnLoop->setText(checked ? tr("循环轮播: 开启") : tr("循环轮播: 关闭"));
         ui->picanimation->SetLoopMode(checked);
     });
     if (_protree_widget)

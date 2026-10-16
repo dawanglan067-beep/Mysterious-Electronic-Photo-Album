@@ -10,14 +10,13 @@ PicBtn::PicBtn(QWidget* parent)
 
 void PicBtn::SetIcons(const QString &normal, const QString &hover, const QString &pressed)
 {
+    setIconSize(QSize(28, 28));
+    setMinimumSize(44, 44);
+    setCursor(Qt::PointingHandCursor);
     _normal = normal;
     _hover = hover;
     _pressed = pressed;
-    QPixmap tmpPixmap;
-    tmpPixmap.load(normal);
-    this->resize(tmpPixmap.size());
-    this->setIcon(tmpPixmap);
-    this->setIconSize(tmpPixmap.size());
+    setIcon(QIcon(normal));
 }
 
 bool PicBtn::event(QEvent *e)
@@ -56,24 +55,15 @@ bool PicBtn::event(QEvent *e)
 
 void PicBtn::setNormal()
 {
-    QPixmap tmpPixmap;
-    tmpPixmap.load(_normal);
-    this->setIcon(tmpPixmap);
-    this->setIconSize(tmpPixmap.size());
+    setIcon(QIcon(_normal));
 }
 
 void PicBtn::setHover()
 {
-    QPixmap tmpPixmap;
-    tmpPixmap.load(_hover);
-    this->setIcon(tmpPixmap);
-    this->setIconSize(tmpPixmap.size());
+    setIcon(QIcon(_hover));
 }
 
 void PicBtn::setPressed()
 {
-    QPixmap tmpPixmap;
-    tmpPixmap.load(_pressed);
-    this->setIcon(tmpPixmap);
-    this->setIconSize(tmpPixmap.size());
+    setIcon(QIcon(_pressed));
 }
