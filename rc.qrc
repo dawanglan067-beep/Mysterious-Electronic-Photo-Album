@@ -1,5 +1,8 @@
 <RCC>
     <qresource prefix="/">
+        <file>icon/app/album.ico</file>
+        <file>icon/app/album.png</file>
+        <file>icon/app/album.svg</file>
         <file>icon/line/active.svg</file>
         <file>icon/line/active_hover.svg</file>
         <file>icon/line/active_press.svg</file>

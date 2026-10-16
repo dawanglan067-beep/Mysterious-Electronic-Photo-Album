@@ -6,6 +6,11 @@
 #include "protreewidget.h"
 #include "protreeitem.h"
 #include "picshow.h"
+#include "imageprocessor.h"
+#include "duplicatephotofinder.h"
+#include "workspacesettings.h"
+#include "musiccontroller.h"
+#include <QSlider>
 #include "const.h"
 #include <QSettings>
 #include <QStackedWidget>
@@ -76,6 +81,59 @@ int main(int argc, char **argv)
     check(temporary.isValid(), "temporary test directory");
     const QString outputDir = app.arguments().size() > 1 ? app.arguments().at(1) : temporary.path();
     QDir().mkpath(outputDir);
+    {
+        QImage input(5, 5, QImage::Format_ARGB32);
+        for (int y = 0; y < 5; ++y)
+            for (int x = 0; x < 5; ++x) input.setPixel(x, y, qRgba(x * 40, y * 40, 60, 80 + x));
+        check(ImageProcessor::Apply(input, {}) == input, "image defaults preserve pixels");
+        ImageProcessor::Parameters parameters;
+        parameters.filter = ImageProcessor::FilterInvert;
+        const QImage inverted = ImageProcessor::Apply(input, parameters);
+        check(inverted.pixel(2, 2) == qRgba(175, 175, 195, 82), "image inversion preserves alpha");
+        bool filtersValid = true;
+        for (int filter = 0; filter <= ImageProcessor::FilterEmboss; ++filter) {
+            parameters = {15, -10, 20, static_cast<ImageProcessor::FilterType>(filter)};
+            const QImage processed = ImageProcessor::Apply(input, parameters);
+            filtersValid &= processed.size() == input.size() && qAlpha(processed.pixel(2, 2)) == 82;
+        }
+        check(filtersValid && ImageProcessor::Apply({}, {}).isNull(), "all image filters retain dimensions and transparency");
+        const QVector<DuplicatePhotoFinder::PhotoHash> hashes = {
+            {"a", "album1", 0}, {"b", "album1", 1}, {"c", "album2", 0}, {"a", "album1", 0}};
+        const auto matches = DuplicatePhotoFinder::FindMatches(hashes);
+        check(matches.size() == 1 && matches[0].keepIndex == 0 && matches[0].duplicateIndex == 1
+              && matches[0].distance == 1, "duplicate matching preserves album and path boundaries");
+        check(DuplicatePhotoFinder::HammingDistance(0, ~quint64(0)) == 64, "hash distance covers all 64 bits");
+        const QString organization = QStringLiteral("AlbumRefactorTests-%1").arg(QCoreApplication::applicationPid());
+        QVariantMap values{{"opened_projects", QStringList{"one", "two"}}, {"music_volume", 37}};
+        WorkspaceSettings::Save(values, organization);
+        check(WorkspaceSettings::Load(organization) == values, "workspace settings round trip preserves key types");
+        QSettings(organization, QStringLiteral("AlbumApp")).clear();
+        const QString invalidAudio = temporary.filePath(QStringLiteral("renamed.mp3"));
+        { QFile file(invalidAudio); file.open(QIODevice::WriteOnly); QByteArray bytes(2048, '\0');
+          bytes.replace(4, 4, "ftyp"); file.write(bytes); }
+        check(!AudioFileProbe::IsAudioFileValid(invalidAudio), "audio probe rejects disguised MP4");
+        QWidget owner;
+        MusicController controller(&owner);
+        int dirtyCount = 0;
+        QObject::connect(&controller, &MusicController::SettingsDirty, &owner, [&]() { ++dirtyCount; });
+        controller.SetMusicVolume(137);
+        controller.SetPlayImmediately(false);
+        controller.SetAutoPlayOnSlideshow(false);
+        controller.SetAutoStopOnSlideshowExit(false);
+        QVariantMap stored;
+        controller.WriteSettings(stored);
+        check(controller.GetMusicVolume() == 100 && stored.value("music_volume").toInt() == 100
+              && !stored.value("music_play_immediately").toBool() && dirtyCount == 4,
+              "music controller persists clamped volume and playback policies");
+        QTimer::singleShot(100, &owner, []() {
+            if (auto *dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget())) dialog->accept();
+        });
+        controller.SlotSetMusic();
+        check(!QApplication::activeModalWidget(), "extracted music settings opens and closes");
+        controller.SlotPauseMusic();
+        controller.SlotStopMusic();
+        check(!controller.IsMusicPlaying(), "music stop leaves controller idle");
+    }
     QList<PhotoEntry> photos;
     for (int i = 0; i < 5; ++i) {
         QImage image(i % 2 ? QSize(800, 1200) : QSize(1200, 800), QImage::Format_RGB32);

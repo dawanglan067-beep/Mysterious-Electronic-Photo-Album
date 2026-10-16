@@ -244,7 +244,7 @@ void MainWindow::SlotCreatePro(bool checked)
 void MainWindow::SlotOpenPro(bool)
 {
     const auto selection = SelectAlbumFolder(
-        this, tr("打开相册 — 进入目录后点击“选择当前文件夹”"),
+        this, tr("打开相册 — 选中文件夹后确认，或进入目录后选择当前文件夹"),
         QStandardPaths::writableLocation(QStandardPaths::PicturesLocation));
     if (!selection.error.isEmpty())
         QMessageBox::warning(this, tr("打开相册"), selection.error);

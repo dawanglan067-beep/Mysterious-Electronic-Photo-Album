@@ -26,6 +26,8 @@ if(MSVC AND CMAKE_GENERATOR MATCHES "Ninja")
 endif()
 
 set(CMAKE_AUTORCC ON)
+set_property(SOURCE app.rc APPEND PROPERTY OBJECT_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/icon/app/album.ico")
 
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets Multimedia Svg)
 
@@ -39,6 +41,13 @@ qt_add_executable(Album
     mainwindow.h
     mainwindow.ui
     albumfolderpicker.h albumfolderpicker.cpp
+    histogramwidget.h histogramwidget.cpp
+    imageprocessor.h imageprocessor.cpp
+    musiccontroller.h musiccontroller.cpp
+    musicsettingsdialog.h musicsettingsdialog.cpp
+    audiofileprobe.h audiofileprobe.cpp
+    workspacesettings.h workspacesettings.cpp
+    duplicatephotofinder.h duplicatephotofinder.cpp
     photoentry.h
     photowallmodel.h photowallmodel.cpp
     photowallwidget.h photowallwidget.cpp
@@ -111,7 +120,7 @@ if(ALBUM_BUILD_FEATURE_TESTS)
     find_package(Qt6 REQUIRED COMPONENTS Test)
     qt_add_executable(AlbumNativePickerTests tests/nativefolderpickertest.cpp albumfolderpicker.cpp albumfolderpicker.h)
     target_include_directories(AlbumNativePickerTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    target_link_libraries(AlbumNativePickerTests PRIVATE Qt::Widgets ole32 shell32 uuid)
+    target_link_libraries(AlbumNativePickerTests PRIVATE Qt::Widgets ole32 oleaut32 shell32 uuid)
     get_target_property(_album_test_sources Album SOURCES)
     list(REMOVE_ITEM _album_test_sources main.cpp protreewidget.cpp)
     list(FILTER _album_test_sources EXCLUDE REGEX "\\$<")

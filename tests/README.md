@@ -4,6 +4,10 @@ Configure with `-DALBUM_BUILD_FEATURE_TESTS=ON`, build, then run
 `ctest --test-dir build-msvc --output-on-failure` in your Qt/MSVC environment.
 The option defaults to OFF for normal application builds.
 
+Module checks cover image processing defaults/inversion/transparency, duplicate
+group boundaries, audio format mismatch detection, settings round trips, music
+volume/policy persistence and the music settings dialog.
+
 The test executable accepts an optional output directory to retain screenshots
 and PDFs. Set `QT_QPA_PLATFORM=offscreen` and `QT_PLUGIN_PATH` to the matching
 Qt installation's `plugins` directory when running it directly.
@@ -25,7 +29,10 @@ Windows native folder browser checks: run `AlbumNativePickerTests.exe` from
 the build directory with the matching Qt runtime on PATH and the Windows
 platform plugin (do not set `QT_QPA_PLATFORM=offscreen`). This briefly opens
 real Windows dialogs and verifies selecting a current folder with a Chinese
-path and cancelling. Run this executable separately from the offscreen suite.
+path, selecting a highlighted child folder instead of its parent, disabling
+confirmation when an image is selected, and cancelling. UI Automation selects
+the actual shell items. Run this executable separately from the offscreen suite.
 For manual acceptance, open an album and import a folder: images should be
 visible, double-clicking an image must not submit it as an album, and
+"选择此文件夹" must select the highlighted folder. With no selected item,
 "选择当前文件夹" must select the directory shown in the address bar.

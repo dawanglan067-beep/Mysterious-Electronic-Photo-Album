@@ -8,31 +8,12 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QWidget>
+#include "histogramwidget.h"
+#include "imageprocessor.h"
 
 namespace Ui {
 class PicShow;
 }
-
-// 实时 RGB 色彩直方图绘制组件
-class HistogramWidget : public QWidget
-{
-    Q_OBJECT
-public:
-    explicit HistogramWidget(QWidget *parent = nullptr);
-    void UpdateHistogram(const QImage &img);
-    void ClearHistogram();
-
-protected:
-    void paintEvent(QPaintEvent *event) override;
-
-private:
-    QVector<int> _hist_r;
-    QVector<int> _hist_g;
-    QVector<int> _hist_b;
-    QVector<int> _hist_l;
-    int _max_count;
-    bool _has_data;
-};
 
 class PicShow : public QDialog
 {
@@ -105,16 +86,7 @@ private:
     QLabel *_lbl_meta_path;
 
     // ===== 内置图像算法工坊状态与控件 =====
-    enum FilterType {
-        FilterNone = 0,
-        FilterGrayscale,
-        FilterSepia,
-        FilterInvert,
-        FilterGaussianBlur,
-        FilterLaplacianSharpen,
-        FilterSobelEdge,
-        FilterEmboss
-    };
+    using FilterType = ImageProcessor::FilterType;
     int _brightness;                          // 亮度调节 (-100 ~ +100)
     int _contrast;                            // 对比度调节 (-100 ~ +100)
     int _saturation;                          // 饱和度调节 (-100 ~ +100)

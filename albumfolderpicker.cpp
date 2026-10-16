@@ -12,6 +12,13 @@ namespace {
 using Microsoft::WRL::ComPtr;
 constexpr DWORD SelectCurrentFolder = 101;
 constexpr DWORD HelpText = 102;
+constexpr DWORD TargetPathText = 103;
+
+struct FolderTarget
+{
+    QString path;
+    bool hasSelection = false;
+};
 
 class ComApartment
 {
@@ -33,6 +40,16 @@ QString ShellDirectory(IShellItem *item)
     CoTaskMemFree(text);
     const QFileInfo info(path);
     return info.isDir() && info.isReadable() ? info.absoluteFilePath() : QString();
+}
+
+FolderTarget ResolveFolderTarget(IFileDialog *dialog)
+{
+    ComPtr<IShellItem> item;
+    if (SUCCEEDED(dialog->GetCurrentSelection(&item)) && item)
+        return {ShellDirectory(item.Get()), true};
+    if (SUCCEEDED(dialog->GetFolder(&item)))
+        return {ShellDirectory(item.Get()), false};
+    return {};
 }
 
 class FolderEvents final : public IFileDialogEvents, public IFileDialogControlEvents
@@ -65,12 +82,12 @@ public:
         if (SUCCEEDED(dialog->GetResult(&selected))) {
             if (!ShellDirectory(selected.Get()).isEmpty()) dialog->SetFolder(selected.Get());
         }
-        SetHelp(L"图片仅供浏览。请点击左下方“选择当前文件夹”确认地址栏中的目录。");
+        UpdateFolder();
         return S_FALSE;
     }
     HRESULT STDMETHODCALLTYPE OnFolderChanging(IFileDialog *, IShellItem *) override { return S_OK; }
     HRESULT STDMETHODCALLTYPE OnFolderChange(IFileDialog *) override { UpdateFolder(); return S_OK; }
-    HRESULT STDMETHODCALLTYPE OnSelectionChange(IFileDialog *) override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE OnSelectionChange(IFileDialog *) override { UpdateFolder(); return S_OK; }
     HRESULT STDMETHODCALLTYPE OnShareViolation(IFileDialog *, IShellItem *, FDE_SHAREVIOLATION_RESPONSE *response) override
     { if (response) *response = FDESVR_DEFAULT; return S_OK; }
     HRESULT STDMETHODCALLTYPE OnTypeChange(IFileDialog *) override { return S_OK; }
@@ -80,14 +97,12 @@ public:
     HRESULT STDMETHODCALLTYPE OnButtonClicked(IFileDialogCustomize *, DWORD id) override
     {
         if (id != SelectCurrentFolder) return S_OK;
-        ComPtr<IShellItem> folder;
-        QString path;
-        if (SUCCEEDED(_dialog->GetFolder(&folder))) path = ShellDirectory(folder.Get());
-        if (path.isEmpty()) {
-            SetHelp(L"当前目录不存在、不可读取或不是本地文件系统目录，请重新选择。");
+        const auto target = ResolveFolderTarget(_dialog);
+        if (target.path.isEmpty()) {
+            UpdateFolder();
             return S_OK;
         }
-        selectedPath = path;
+        selectedPath = target.path;
         const HRESULT result = _dialog->Close(S_OK);
         if (FAILED(result)) { selectedPath.clear(); SetHelp(L"无法完成选择，请重试。"); }
         return S_OK;
@@ -96,16 +111,24 @@ public:
     HRESULT STDMETHODCALLTYPE OnControlActivating(IFileDialogCustomize *, DWORD) override { return S_OK; }
     void UpdateFolder()
     {
-        ComPtr<IShellItem> folder;
         ComPtr<IFileDialogCustomize> controls;
-        QString path;
-        if (SUCCEEDED(_dialog->GetFolder(&folder))) path = ShellDirectory(folder.Get());
+        const auto target = ResolveFolderTarget(_dialog);
         if (SUCCEEDED(_dialog->QueryInterface(IID_PPV_ARGS(&controls)))) {
-            controls->SetControlState(SelectCurrentFolder, path.isEmpty() ? CDCS_VISIBLE
+            controls->SetControlState(SelectCurrentFolder, target.path.isEmpty() ? CDCS_VISIBLE
                 : static_cast<CDCONTROLSTATEF>(CDCS_VISIBLE | CDCS_ENABLED));
-            const QString help = path.isEmpty() ? QStringLiteral("请进入一个真实文件夹，再选择当前文件夹。")
-                : QStringLiteral("将选择：%1").arg(QDir::toNativeSeparators(path));
+            controls->SetControlLabel(SelectCurrentFolder, target.hasSelection
+                ? L"选择此文件夹" : L"选择当前文件夹");
+            const QString help = target.path.isEmpty()
+                ? (target.hasSelection ? QStringLiteral("图片仅供浏览，请选择可读取的文件夹。")
+                                       : QStringLiteral("请进入一个可读取的文件夹。"))
+                : (target.hasSelection ? QStringLiteral("将打开选中的文件夹：")
+                                       : QStringLiteral("将打开当前所在的文件夹："));
             controls->SetControlLabel(HelpText, reinterpret_cast<LPCWSTR>(help.utf16()));
+            // Keep the directory name at the start so it remains visible in narrow dialogs.
+            const QString detail = target.path.isEmpty() ? QStringLiteral("未选择有效文件夹")
+                : QStringLiteral("%1 — %2").arg(QDir(target.path).dirName(),
+                                                  QDir::toNativeSeparators(target.path));
+            controls->SetControlLabel(TargetPathText, reinterpret_cast<LPCWSTR>(detail.utf16()));
         }
     }
     QString selectedPath;
@@ -147,6 +170,7 @@ AlbumFolderSelection SelectAlbumFolder(QWidget *parent, const QString &title, co
     if (SUCCEEDED(result)) result = controls->AddPushButton(SelectCurrentFolder, L"选择当前文件夹");
     if (SUCCEEDED(result)) result = controls->MakeProminent(SelectCurrentFolder);
     if (SUCCEEDED(result)) result = controls->AddText(HelpText, L"请进入相册目录，再点击“选择当前文件夹”。");
+    if (SUCCEEDED(result)) result = controls->AddText(TargetPathText, L"正在读取目录…");
     if (FAILED(result)) return {{}, SetupError(result)};
     QString start = initialDirectory;
     if (!QFileInfo(start).isDir()) start = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);

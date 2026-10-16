@@ -27,166 +27,6 @@
 
 // ======================== HistogramWidget 实现 ========================
 
-HistogramWidget::HistogramWidget(QWidget *parent)
-    : QWidget(parent)
-    , _hist_r(256, 0)
-    , _hist_g(256, 0)
-    , _hist_b(256, 0)
-    , _hist_l(256, 0)
-    , _max_count(1)
-    , _has_data(false)
-{
-    setMinimumHeight(130);
-    setMaximumHeight(140);
-}
-
-void HistogramWidget::ClearHistogram()
-{
-    _hist_r.fill(0);
-    _hist_g.fill(0);
-    _hist_b.fill(0);
-    _hist_l.fill(0);
-    _max_count = 1;
-    _has_data = false;
-    update();
-}
-
-void HistogramWidget::UpdateHistogram(const QImage &img)
-{
-    if (img.isNull() || img.width() <= 0 || img.height() <= 0)
-    {
-        ClearHistogram();
-        return;
-    }
-
-    _hist_r.fill(0);
-    _hist_g.fill(0);
-    _hist_b.fill(0);
-    _hist_l.fill(0);
-
-    QImage rgbImg = img.Format_RGB32 == img.format() || img.Format_ARGB32 == img.format()
-                        ? img
-                        : img.convertToFormat(QImage::Format_RGB32);
-
-    const int w = rgbImg.width();
-    const int h = rgbImg.height();
-    // 对超大分辨率图像采用步长采样，保证直方图实时计算耗时 < 2ms
-    const int step = std::max(1, static_cast<int>(std::sqrt((w * h) / 120000.0)));
-
-    for (int y = 0; y < h; y += step)
-    {
-        const QRgb *line = reinterpret_cast<const QRgb*>(rgbImg.constScanLine(y));
-        for (int x = 0; x < w; x += step)
-        {
-            const QRgb pixel = line[x];
-            const int r = qRed(pixel);
-            const int g = qGreen(pixel);
-            const int b = qBlue(pixel);
-            const int l = qBound(0, static_cast<int>(0.299 * r + 0.587 * g + 0.114 * b), 255);
-            _hist_r[r]++;
-            _hist_g[g]++;
-            _hist_b[b]++;
-            _hist_l[l]++;
-        }
-    }
-
-    // 排除两端极值 0 和 255 的过曝/死黑尖峰干扰，使直方图主体分布清晰饱满
-    _max_count = 1;
-    for (int i = 2; i < 254; ++i)
-    {
-        _max_count = std::max({_max_count, _hist_r[i], _hist_g[i], _hist_b[i]});
-    }
-    if (_max_count <= 1)
-    {
-        for (int i = 0; i < 256; ++i)
-        {
-            _max_count = std::max({_max_count, _hist_r[i], _hist_g[i], _hist_b[i]});
-        }
-    }
-
-    _has_data = true;
-    update();
-}
-
-void HistogramWidget::paintEvent(QPaintEvent *event)
-{
-    Q_UNUSED(event);
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-
-    const QRect r = rect().adjusted(2, 2, -2, -2);
-    // 绘制深色直方图背景框
-    painter.setPen(QPen(QColor(80, 82, 86), 1));
-    painter.setBrush(QColor(32, 34, 37));
-    painter.drawRoundedRect(r, 6, 6);
-
-    // 绘制内部参考网格线（四等分）
-    painter.setPen(QPen(QColor(55, 58, 62), 1, Qt::DotLine));
-    for (int i = 1; i < 4; ++i)
-    {
-        int gx = r.left() + (r.width() * i) / 4;
-        int gy = r.top() + (r.height() * i) / 4;
-        painter.drawLine(gx, r.top(), gx, r.bottom());
-        painter.drawLine(r.left(), gy, r.right(), gy);
-    }
-
-    if (!_has_data)
-    {
-        painter.setPen(QColor(130, 134, 140));
-        painter.drawText(r, Qt::AlignCenter, tr("暂无直方图数据"));
-        return;
-    }
-
-    auto drawChannelCurve = [&](const QVector<int> &hist, const QColor &strokeColor, const QColor &fillColor) {
-        QPainterPath path;
-        const double plotW = r.width() - 8.0;
-        const double plotH = r.height() - 12.0;
-        const double baseX = r.left() + 4.0;
-        const double baseY = r.bottom() - 4.0;
-
-        path.moveTo(baseX, baseY);
-        for (int i = 0; i < 256; ++i)
-        {
-            double x = baseX + (i / 255.0) * plotW;
-            // 平滑邻域均值滤波让曲线更自然
-            double val = hist[i];
-            if (i > 0 && i < 255)
-            {
-                val = (hist[i - 1] + hist[i] * 2.0 + hist[i + 1]) / 4.0;
-            }
-            double ratio = std::min(1.0, val / static_cast<double>(_max_count));
-            double y = baseY - ratio * plotH;
-            path.lineTo(x, y);
-        }
-        path.lineTo(baseX + plotW, baseY);
-        path.closeSubpath();
-
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(fillColor);
-        painter.drawPath(path);
-
-        painter.setPen(QPen(strokeColor, 1.3));
-        painter.setBrush(Qt::NoBrush);
-        painter.drawPath(path);
-    };
-
-    // 依次叠加绘制 B、G、R 三通道直方图与亮度参考线
-    drawChannelCurve(_hist_b, QColor(68, 138, 255, 220), QColor(68, 138, 255, 65));
-    drawChannelCurve(_hist_g, QColor(105, 240, 174, 220), QColor(105, 240, 174, 65));
-    drawChannelCurve(_hist_r, QColor(255, 82, 82, 220), QColor(255, 82, 82, 65));
-    drawChannelCurve(_hist_l, QColor(230, 230, 230, 130), QColor(255, 255, 255, 18));
-
-    // 右上角绘制 RGB 通道图例标识
-    painter.setPen(QColor(180, 184, 190));
-    QFont f = painter.font();
-    f.setPointSize(8);
-    f.setBold(true);
-    painter.setFont(f);
-    painter.drawText(r.adjusted(8, 5, -8, -4), Qt::AlignTop | Qt::AlignRight, "RGB / Luma");
-}
-
-// ======================== PicShow 实现 ========================
-
 PicShow::PicShow(QWidget *parent)
     : QDialog(parent)
     , ui(new Ui::PicShow)
@@ -205,7 +45,7 @@ PicShow::PicShow(QWidget *parent)
     , _brightness(0)
     , _contrast(0)
     , _saturation(0)
-    , _filter_type(FilterNone)
+    , _filter_type(ImageProcessor::FilterNone)
     , _slider_bright(nullptr)
     , _slider_contrast(nullptr)
     , _slider_sat(nullptr)
@@ -378,14 +218,14 @@ void PicShow::InitStudioUI()
     lblFilter->setStyleSheet("color: rgb(175, 180, 188); font-size: 12px;");
     _combo_filter = new QComboBox(_info_panel);
     _combo_filter->setObjectName("studioCombo");
-    _combo_filter->addItem(tr("原图 (无算子)"), FilterNone);
-    _combo_filter->addItem(tr("加权灰度化 (Grayscale)"), FilterGrayscale);
-    _combo_filter->addItem(tr("复古怀旧矩阵 (Sepia)"), FilterSepia);
-    _combo_filter->addItem(tr("反色负片 (Invert)"), FilterInvert);
-    _combo_filter->addItem(tr("高斯平滑滤波 (3×3 Gaussian)"), FilterGaussianBlur);
-    _combo_filter->addItem(tr("拉普拉斯锐化 (Laplacian)"), FilterLaplacianSharpen);
-    _combo_filter->addItem(tr("Sobel 梯度边缘检测"), FilterSobelEdge);
-    _combo_filter->addItem(tr("浮雕卷积特征 (Emboss)"), FilterEmboss);
+    _combo_filter->addItem(tr("原图 (无算子)"), ImageProcessor::FilterNone);
+    _combo_filter->addItem(tr("加权灰度化 (Grayscale)"), ImageProcessor::FilterGrayscale);
+    _combo_filter->addItem(tr("复古怀旧矩阵 (Sepia)"), ImageProcessor::FilterSepia);
+    _combo_filter->addItem(tr("反色负片 (Invert)"), ImageProcessor::FilterInvert);
+    _combo_filter->addItem(tr("高斯平滑滤波 (3×3 Gaussian)"), ImageProcessor::FilterGaussianBlur);
+    _combo_filter->addItem(tr("拉普拉斯锐化 (Laplacian)"), ImageProcessor::FilterLaplacianSharpen);
+    _combo_filter->addItem(tr("Sobel 梯度边缘检测"), ImageProcessor::FilterSobelEdge);
+    _combo_filter->addItem(tr("浮雕卷积特征 (Emboss)"), ImageProcessor::FilterEmboss);
     filterRow->addWidget(lblFilter);
     filterRow->addWidget(_combo_filter, 1);
     infoLayout->addLayout(filterRow);
@@ -523,7 +363,7 @@ void PicShow::RebuildTransformedPixmap()
     }
 
     // 应用数字图像算法管线（色彩空间调节 + 卷积/点运算算子）
-    if (_brightness != 0 || _contrast != 0 || _saturation != 0 || _filter_type != FilterNone)
+    if (_brightness != 0 || _contrast != 0 || _saturation != 0 || _filter_type != ImageProcessor::FilterNone)
     {
         // 当鼠标正在按住拖拽滑块且原图分辨率较高（> 1600px）时，使用降采样预览保证 60fps 丝滑跟手，松开滑块后立即渲染全分辨率原图
         const bool isSliderDragging = (_slider_bright && _slider_bright->isSliderDown()) ||
@@ -632,7 +472,7 @@ void PicShow::Clear()
     _brightness = 0;
     _contrast = 0;
     _saturation = 0;
-    _filter_type = FilterNone;
+    _filter_type = ImageProcessor::FilterNone;
     if (_lbl_bright_val) _lbl_bright_val->setText("0");
     if (_lbl_contrast_val) _lbl_contrast_val->setText("0");
     if (_lbl_sat_val) _lbl_sat_val->setText("0");
@@ -936,7 +776,7 @@ void PicShow::SlotAdjustParamsChanged()
     }
     if (_combo_filter)
     {
-        _filter_type = static_cast<FilterType>(_combo_filter->currentData().toInt());
+        _filter_type = static_cast<ImageProcessor::FilterType>(_combo_filter->currentData().toInt());
     }
     if (!_src_image.isNull())
     {
@@ -953,7 +793,7 @@ void PicShow::SlotResetAlgorithms()
     _brightness = 0;
     _contrast = 0;
     _saturation = 0;
-    _filter_type = FilterNone;
+    _filter_type = ImageProcessor::FilterNone;
     if (_lbl_bright_val) _lbl_bright_val->setText("0");
     if (_lbl_contrast_val) _lbl_contrast_val->setText("0");
     if (_lbl_sat_val) _lbl_sat_val->setText("0");
@@ -985,174 +825,6 @@ void PicShow::SlotSaveProcessedImage()
     {
         QMessageBox::warning(this, tr("导出失败"), tr("无法写入目标图像文件，请检查路径权限。"));
     }
-}
-
-QImage PicShow::ApplyImageAlgorithms(const QImage &src) const
-{
-    if (src.isNull()) return src;
-
-    QImage workImg = src.convertToFormat(QImage::Format_ARGB32);
-    const int w = workImg.width();
-    const int h = workImg.height();
-
-    // 1. 先执行空间域 3x3 卷积算子（高斯平滑、拉普拉斯锐化、Sobel 梯度边缘检测、浮雕算子）
-    if (_filter_type == FilterGaussianBlur ||
-        _filter_type == FilterLaplacianSharpen ||
-        _filter_type == FilterSobelEdge ||
-        _filter_type == FilterEmboss)
-    {
-        QImage convOut(w, h, QImage::Format_ARGB32);
-        // 复制边界像素
-        for (int y = 0; y < h; ++y)
-        {
-            const QRgb *sLine = reinterpret_cast<const QRgb*>(workImg.constScanLine(y));
-            QRgb *dLine = reinterpret_cast<QRgb*>(convOut.scanLine(y));
-            if (y == 0 || y == h - 1)
-            {
-                std::copy(sLine, sLine + w, dLine);
-            }
-            else
-            {
-                dLine[0] = sLine[0];
-                dLine[w - 1] = sLine[w - 1];
-            }
-        }
-
-        for (int y = 1; y < h - 1; ++y)
-        {
-            const QRgb *row0 = reinterpret_cast<const QRgb*>(workImg.constScanLine(y - 1));
-            const QRgb *row1 = reinterpret_cast<const QRgb*>(workImg.constScanLine(y));
-            const QRgb *row2 = reinterpret_cast<const QRgb*>(workImg.constScanLine(y + 1));
-            QRgb *dst = reinterpret_cast<QRgb*>(convOut.scanLine(y));
-
-            for (int x = 1; x < w - 1; ++x)
-            {
-                const int a = qAlpha(row1[x]);
-                if (_filter_type == FilterGaussianBlur)
-                {
-                    // 3x3 高斯核 [1,2,1; 2,4,2; 1,2,1] / 16
-                    int r = (qRed(row0[x-1]) + 2*qRed(row0[x]) + qRed(row0[x+1]) +
-                             2*qRed(row1[x-1]) + 4*qRed(row1[x]) + 2*qRed(row1[x+1]) +
-                             qRed(row2[x-1]) + 2*qRed(row2[x]) + qRed(row2[x+1])) >> 4;
-                    int g = (qGreen(row0[x-1]) + 2*qGreen(row0[x]) + qGreen(row0[x+1]) +
-                             2*qGreen(row1[x-1]) + 4*qGreen(row1[x]) + 2*qGreen(row1[x+1]) +
-                             qGreen(row2[x-1]) + 2*qGreen(row2[x]) + qGreen(row2[x+1])) >> 4;
-                    int b = (qBlue(row0[x-1]) + 2*qBlue(row0[x]) + qBlue(row0[x+1]) +
-                             2*qBlue(row1[x-1]) + 4*qBlue(row1[x]) + 2*qBlue(row1[x+1]) +
-                             qBlue(row2[x-1]) + 2*qBlue(row2[x]) + qBlue(row2[x+1])) >> 4;
-                    dst[x] = qRgba(r, g, b, a);
-                }
-                else if (_filter_type == FilterLaplacianSharpen)
-                {
-                    // 拉普拉斯锐化核 [0,-1,0; -1,5,-1; 0,-1,0]
-                    int r = qBound(0, 5*qRed(row1[x]) - qRed(row0[x]) - qRed(row1[x-1]) - qRed(row1[x+1]) - qRed(row2[x]), 255);
-                    int g = qBound(0, 5*qGreen(row1[x]) - qGreen(row0[x]) - qGreen(row1[x-1]) - qGreen(row1[x+1]) - qGreen(row2[x]), 255);
-                    int b = qBound(0, 5*qBlue(row1[x]) - qBlue(row0[x]) - qBlue(row1[x-1]) - qBlue(row1[x+1]) - qBlue(row2[x]), 255);
-                    dst[x] = qRgba(r, g, b, a);
-                }
-                else if (_filter_type == FilterSobelEdge)
-                {
-                    // Sobel 一阶微分梯度算子 Gx 与 Gy
-                    auto luma = [](QRgb p) -> int {
-                        return (qRed(p) * 77 + qGreen(p) * 150 + qBlue(p) * 29) >> 8;
-                    };
-                    int gx = -luma(row0[x-1]) + luma(row0[x+1])
-                             - 2*luma(row1[x-1]) + 2*luma(row1[x+1])
-                             - luma(row2[x-1]) + luma(row2[x+1]);
-                    int gy = -luma(row0[x-1]) - 2*luma(row0[x]) - luma(row0[x+1])
-                             + luma(row2[x-1]) + 2*luma(row2[x]) + luma(row2[x+1]);
-                    int mag = qBound(0, static_cast<int>(std::sqrt(gx * gx + gy * gy)), 255);
-                    dst[x] = qRgba(mag, mag, mag, a);
-                }
-                else if (_filter_type == FilterEmboss)
-                {
-                    // 浮雕核 [-2,-1,0; -1,1,1; 0,1,2] + 128
-                    int r = qBound(0, -2*qRed(row0[x-1]) - qRed(row0[x]) - qRed(row1[x-1]) + qRed(row1[x]) + qRed(row1[x+1]) + qRed(row2[x]) + 2*qRed(row2[x+1]) + 128, 255);
-                    int g = qBound(0, -2*qGreen(row0[x-1]) - qGreen(row0[x]) - qGreen(row1[x-1]) + qGreen(row1[x]) + qGreen(row1[x+1]) + qGreen(row2[x]) + 2*qGreen(row2[x+1]) + 128, 255);
-                    int b = qBound(0, -2*qBlue(row0[x-1]) - qBlue(row0[x]) - qBlue(row1[x-1]) + qBlue(row1[x]) + qBlue(row1[x+1]) + qBlue(row2[x]) + 2*qBlue(row2[x+1]) + 128, 255);
-                    dst[x] = qRgba(r, g, b, a);
-                }
-            }
-        }
-        workImg = convOut;
-    }
-
-    // 2. 逐像素点运算：点算子滤镜（灰度、怀旧、反色）+ 亮度/对比度预计算查找表 (LUT) + 定点饱和度插值
-    const bool needColorAdjust = (_brightness != 0 || _contrast != 0 || _saturation != 0);
-    const bool needPointFilter = (_filter_type == FilterGrayscale ||
-                                  _filter_type == FilterSepia ||
-                                  _filter_type == FilterInvert);
-
-    if (!needColorAdjust && !needPointFilter)
-    {
-        return workImg;
-    }
-
-    int bcLut[256];
-    const double contrastFactor = std::pow((100.0 + _contrast) / 100.0, 2.0);
-    for (int i = 0; i < 256; ++i)
-    {
-        double val = ((i + _brightness - 128.0) * contrastFactor) + 128.0;
-        bcLut[i] = qBound(0, static_cast<int>(val + 0.5), 255);
-    }
-    const int satFixed = qRound(((100.0 + _saturation) / 100.0) * 256.0);
-
-    for (int y = 0; y < h; ++y)
-    {
-        QRgb *line = reinterpret_cast<QRgb*>(workImg.scanLine(y));
-        for (int x = 0; x < w; ++x)
-        {
-            const QRgb p = line[x];
-            int r = qRed(p);
-            int g = qGreen(p);
-            int b = qBlue(p);
-            const int a = qAlpha(p);
-
-            if (_filter_type == FilterGrayscale)
-            {
-                int gray = (r * 77 + g * 150 + b * 29) >> 8;
-                r = g = b = gray;
-            }
-            else if (_filter_type == FilterSepia)
-            {
-                int tr = qBound(0, (r * 101 + g * 197 + b * 48) >> 8, 255);
-                int tg = qBound(0, (r * 89 + g * 176 + b * 43) >> 8, 255);
-                int tb = qBound(0, (r * 70 + g * 137 + b * 34) >> 8, 255);
-                r = tr; g = tg; b = tb;
-            }
-            else if (_filter_type == FilterInvert)
-            {
-                r = 255 - r;
-                g = 255 - g;
-                b = 255 - b;
-            }
-
-            if (needColorAdjust)
-            {
-                int nr = bcLut[r];
-                int ng = bcLut[g];
-                int nb = bcLut[b];
-
-                if (_saturation != 0)
-                {
-                    int luma = (nr * 77 + ng * 150 + nb * 29) >> 8;
-                    r = qBound(0, luma + (((nr - luma) * satFixed) >> 8), 255);
-                    g = qBound(0, luma + (((ng - luma) * satFixed) >> 8), 255);
-                    b = qBound(0, luma + (((nb - luma) * satFixed) >> 8), 255);
-                }
-                else
-                {
-                    r = nr;
-                    g = ng;
-                    b = nb;
-                }
-            }
-
-            line[x] = qRgba(r, g, b, a);
-        }
-    }
-
-    return workImg;
 }
 
 // 控制上一张/下一张按钮的渐变动画逻辑
@@ -1213,7 +885,7 @@ void PicShow::SlotSelectItem(const QString &path)
     _brightness = 0;
     _contrast = 0;
     _saturation = 0;
-    _filter_type = FilterNone;
+    _filter_type = ImageProcessor::FilterNone;
     if (_lbl_bright_val) _lbl_bright_val->setText("0");
     if (_lbl_contrast_val) _lbl_contrast_val->setText("0");
     if (_lbl_sat_val) _lbl_sat_val->setText("0");
@@ -1234,3 +906,8 @@ void PicShow::SlotClear()
 }
 
 
+
+QImage PicShow::ApplyImageAlgorithms(const QImage &src) const
+{
+    return ImageProcessor::Apply(src, {_brightness, _contrast, _saturation, _filter_type});
+}
