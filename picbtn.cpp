@@ -1,6 +1,7 @@
 #include "picbtn.h"
-#include<QPixmap>
-#include<QEvent>
+#include <QPixmap>
+#include <QEvent>
+#include <QMouseEvent>
 PicBtn::PicBtn(QWidget* parent)
     : QPushButton(parent)
 {
@@ -30,11 +31,23 @@ bool PicBtn::event(QEvent *e)
         setNormal();
         break;
     case QEvent::MouseButtonPress:
-        setPressed();
+        if (static_cast<QMouseEvent*>(e)->button() == Qt::LeftButton)
+        {
+            setPressed();
+        }
         break;
     case QEvent::MouseButtonRelease:
-        setHover();
+    {
+        auto *me = static_cast<QMouseEvent*>(e);
+        if (me->button() == Qt::LeftButton)
+        {
+            if (this->rect().contains(me->pos()))
+                setHover();
+            else
+                setNormal();
+        }
         break;
+    }
     default:
         break;
     }

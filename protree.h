@@ -15,6 +15,8 @@ public:
     explicit ProTree(QWidget *parent = nullptr);
     ~ProTree();
     QTreeWidget*GetTreeWidget();
+protected:
+    void reject() override {}
 private:
     Ui::ProTree *ui;
 

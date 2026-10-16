@@ -1,31 +1,40 @@
 #ifndef OPENTREETHREAD_H
 #define OPENTREETHREAD_H
 #include <QThread>
-#include<QTreeWidget>
+#include <QTreeWidget>
+#include <atomic>
+
 class OpenTreeThread : public QThread
 {
     Q_OBJECT
 public:
     // 构造函数：初始化相册路径、文件计数器及树控件指针
     explicit OpenTreeThread(const QString &path, int file_count, QTreeWidget *self, QObject *parent = nullptr);
+    ~OpenTreeThread();
 
     // 打开相册的核心逻辑入口：构建根节点并启动递归遍历
     void OpenProTree(const QString &src_path, int &file_count, QTreeWidget *self);
+    const QString& GetSrcPath() const { return _src_path; }
+    QTreeWidgetItem* GetRoot() const { return _root; }
+
+    // 在 GUI 主线程中将后台扫描构建好的相册子树安全挂载到 QTreeWidget
+    void CommitToTree();
 
 protected:
     // 线程后台执行入口
-    virtual void run();
+    virtual void run() override;
 
 private:
     // 递归扫描相册目录，构建目录/照片树节点，并通过引用传递 preitem 正确串联双向链表
     void RecursiveProTree(const QString &src_path, int &file_count, QTreeWidget *self,
                           QTreeWidgetItem *root, QTreeWidgetItem *parent, QTreeWidgetItem* &preitem);
 
-    QString _src_path;      // 需要打开的相册文件夹绝对路径
-    int _file_count;        // 图片文件计数器
-    QTreeWidget *_self;     // 主界面树控件指针
-    bool _bstop;            // 线程取消/中断标志位
-    QTreeWidgetItem *_root; // 当前相册的根节点指针
+    QString _src_path;          // 需要打开的相册文件夹绝对路径
+    int _file_count;            // 图片文件计数器
+    QTreeWidget *_self;         // 主界面树控件指针
+    std::atomic<bool> _bstop;   // 线程取消/中断原子标志位
+    QTreeWidgetItem *_root;     // 当前相册的根节点指针
+    bool _transferred_to_tree;  // 标记根节点所有权是否已移交至主界面树控件（防止析构野指针 UAF）
 
 signals:
     void SigFinishProGress(int); // 扫描导入完成信号（通知主线程关闭进度弹窗）

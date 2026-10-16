@@ -1,5 +1,8 @@
 # Qt 编译生成文件
 build/
+build-msvc/
+build-review/
+run.log
 *.pro.user
 *.pro.user.*
 *.qbs.user

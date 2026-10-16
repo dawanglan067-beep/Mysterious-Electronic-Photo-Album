@@ -72,19 +72,28 @@
 - **构建工具**：CMake (3.19+) 或 Qt Creator
 
 ### 使用 CMake 命令行构建运行
-```bash
-# 1. 创建并进入构建目录
-mkdir build && cd build
 
-# 2. 配置 CMake 项目 (指定 Qt6 CMake 路径)
-cmake .. -DCMAKE_BUILD_TYPE=Release
+Windows 下使用 **Developer PowerShell for VS 2022（x64）**，确保已安装 MSVC C++ 工具与 Windows SDK。以下命令从项目根目录执行，Qt 和 Ninja 路径按本机安装位置调整：
 
-# 3. 编译工程
-cmake --build . --config Release
+```powershell
+cmake -S . -B build/windows-release -G Ninja `
+    -DCMAKE_BUILD_TYPE=Release `
+    -DCMAKE_PREFIX_PATH=C:/Qt/6.8.3/msvc2022_64 `
+    -DCMAKE_MAKE_PROGRAM=C:/Qt/Tools/Ninja/ninja.exe
+cmake --build build/windows-release --parallel
 
-# 4. 运行程序
-./Album
+# 部署 Qt DLL、平台插件和多媒体插件，随后可直接双击 EXE
+& C:/Qt/6.8.3/msvc2022_64/bin/windeployqt.exe --release build/windows-release/Album.exe
+& ./build/windows-release/Album.exe
 ```
+
+使用 Qt Creator 时，选择 `Desktop Qt 6.8.3 MSVC2022 64bit` Kit，重新运行 CMake 后构建、运行。MSVC 版 Qt 必须搭配 MSVC 编译器；MinGW/GCC 不能与其混用。
+
+### 启动失败排查
+
+- **编译成功但启动即退出，错误码 `0xC0000374`**：已确认旧构建目录存在头文件依赖丢失。MSVC 的中文 `/showIncludes` 前缀编码与 Ninja 配置不匹配，导致修改头文件后仍链接旧对象文件，出现对象大小不一致和堆损坏。CMake 配置现已通过探测编译器原始输出修复此前缀。已有构建目录需重新运行 CMake，并执行一次 `cmake --build <构建目录> --clean-first`。
+- **直接打开 EXE 提示缺少 DLL，或返回 `0xC0000135`**：使用对应 Qt Kit 的 `windeployqt.exe` 部署运行库。Debug 构建使用 `--debug`，Release 构建使用 `--release`。
+- **`CMAKE_MAKE_PROGRAM-NOTFOUND`**：配置时明确指定 Ninja 路径，并在 VS 开发者终端中运行。使用独立的构建目录，避免复用其他编译器留下的缓存。
 
 ---
 

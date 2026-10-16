@@ -1,9 +1,10 @@
 #include "prolistwid.h"
-#include"protreeitem.h"
-#include"const.h"
-#include<QPainter>
-#include"prelistitem.h"
-#include<QGuiApplication>
+#include "protreeitem.h"
+#include "const.h"
+#include <QPainter>
+#include <QImageReader>
+#include "prelistitem.h"
+#include <QGuiApplication>
 ProListWid::ProListWid(QWidget *parent)
     :_global(0),QListWidget(parent),last_index(17)
 {
@@ -21,8 +22,24 @@ ProListWid::~ProListWid()
 
 void ProListWid::AddListItem(const QString &path)
 {
-    QPixmap src_pixmap(path);
-    src_pixmap=src_pixmap.scaled(PREICON_SIZE,PREICON_SIZE,Qt::KeepAspectRatio);
+    QImageReader reader(path);
+    reader.setAutoTransform(true);
+    QSize origSize = reader.size();
+    if (origSize.isValid())
+    {
+        reader.setScaledSize(origSize.scaled(PREICON_SIZE, PREICON_SIZE, Qt::KeepAspectRatio));
+    }
+    QImage img = reader.read();
+    QPixmap src_pixmap;
+    if (!img.isNull())
+    {
+        src_pixmap = QPixmap::fromImage(img.scaled(PREICON_SIZE, PREICON_SIZE, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    }
+    else
+    {
+        src_pixmap.load(path);
+        src_pixmap = src_pixmap.scaled(PREICON_SIZE, PREICON_SIZE, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
     QPixmap dst_pixmap(QSize(PREICON_SIZE,PREICON_SIZE));
     //填充颜色
     dst_pixmap.fill(QColor(220,220,200,50));
@@ -68,41 +85,59 @@ void ProListWid::SlotUpPreList(QTreeWidgetItem *tree_item)
 
 void ProListWid::SlotUpSelect(QTreeWidgetItem *tree_item)
 {
-    if(!tree_item)
+    if (!tree_item)
     {
         return;
     }
-    auto pro_item=dynamic_cast<ProTreeItem*>(tree_item);
-    auto path=pro_item->GetPath();
-    auto iter=_set_items.find(path);
-    if(iter==_set_items.end())
+    auto *pro_item = dynamic_cast<ProTreeItem*>(tree_item);
+    if (!pro_item)
     {
         return;
     }
-    auto *list_item=dynamic_cast<PreListItem*>(iter.value());
-    auto index=list_item->GetIndex();
-    if(index > 17)
+    auto path = pro_item->GetPath();
+    auto iter = _set_items.find(path);
+    if (iter == _set_items.end())
     {
-        auto pos_cur=this->pos();
-        this->move(pos_cur.x()-(index-last_index)*100,pos_cur.y());
+        return;
+    }
+    auto *list_item = dynamic_cast<PreListItem*>(iter.value());
+    if (!list_item)
+    {
+        return;
+    }
+    auto index = list_item->GetIndex();
+    const int itemStep = PREITEM_SIZE + this->spacing() * 2;
+    const int parentW = (this->parentWidget() && this->parentWidget()->width() > 200)
+                            ? (this->parentWidget()->width() - 20)
+                            : 1700;
+    const int maxVisibleCount = std::max(1, parentW / itemStep);
+
+    if (index > maxVisibleCount)
+    {
+        int shiftCount = index - maxVisibleCount;
+        this->move(_pos_origin.x() - shiftCount * itemStep, _pos_origin.y());
+        last_index = index;
     }
     else
     {
         this->move(_pos_origin);
-        last_index=17;
+        last_index = maxVisibleCount;
     }
     this->setCurrentItem(iter.value());
 }
 
 void ProListWid::SlotItemPressed(QListWidgetItem *item)
 {
-    if(QGuiApplication::mouseButtons()!=Qt::LeftButton)
+    if (QGuiApplication::mouseButtons() != Qt::LeftButton)
     {
         return;
     }
-    auto *list_item=dynamic_cast<PreListItem*>(item);
-    auto cur_index=list_item->GetIndex();
-    auto path=list_item->GetPath();
+    auto *list_item = dynamic_cast<PreListItem*>(item);
+    if (!list_item)
+    {
+        return;
+    }
+    auto path = list_item->GetPath();
     this->setCurrentItem(item);
     emit SigUpSelectShow(path);
 }

@@ -9,6 +9,7 @@ class ProTreeItem : public QTreeWidgetItem
 public:
     ProTreeItem(QTreeWidget* view, const QString &name, const QString &path, int type = Type);
     ProTreeItem(QTreeWidgetItem* parent, const QString &name, const QString &path, QTreeWidgetItem* root, int type = Type);
+    virtual ~ProTreeItem() override = default;
     const QString& GetPath() const { return _path; }
     QTreeWidgetItem* GetRoot() const { return _root; }
     void SetPreItem(QTreeWidgetItem*item);

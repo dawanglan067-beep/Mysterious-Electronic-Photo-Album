@@ -2,12 +2,21 @@
 #include "protreeitem.h"
 #include <QTimer>
 #include <QPainter>
+#include <QPainterPath>
+#include <QtMath>
 
 PicAnimationWid::PicAnimationWid(QWidget *parent)
     : QWidget{parent}
     , _factor(0.0f)
+    , _hold_ms(0.0f)
+    , _speed_mult(1.0f)
+    , _effect_mode(EffectFade)
+    , _b_loop(true)
     , _timer(nullptr)
     , _cur_item(nullptr)
+    , _first_item(nullptr)
+    , _last_item(nullptr)
+    , _preload_cursor(nullptr)
     , _b_start(false)
 {
     // 1. 创建动画驱动定时器
@@ -25,6 +34,96 @@ PicAnimationWid::~PicAnimationWid()
     }
 }
 
+void PicAnimationWid::SetTransitionEffect(TransitionEffect effect)
+{
+    _effect_mode = effect;
+    update();
+}
+
+void PicAnimationWid::SetSpeedMultiplier(float mult)
+{
+    _speed_mult = qBound(0.25f, mult, 4.0f);
+}
+
+void PicAnimationWid::SetLoopMode(bool loop)
+{
+    _b_loop = loop;
+}
+
+ProTreeItem* PicAnimationWid::GetNextVisibleItem(ProTreeItem *item) const
+{
+    if (!item) return nullptr;
+    ProTreeItem *cur = item->GetNextItem();
+    while (cur && cur->isHidden())
+    {
+        cur = cur->GetNextItem();
+    }
+    return cur;
+}
+
+ProTreeItem* PicAnimationWid::GetPreVisibleItem(ProTreeItem *item) const
+{
+    if (!item) return nullptr;
+    ProTreeItem *cur = item->GetPreItem();
+    while (cur && cur->isHidden())
+    {
+        cur = cur->GetPreItem();
+    }
+    return cur;
+}
+
+void PicAnimationWid::PreloadNextThumbnailStep()
+{
+    if (!_preload_cursor) return;
+    auto *pro_cur = dynamic_cast<ProTreeItem*>(_preload_cursor);
+    while (pro_cur && pro_cur->isHidden())
+    {
+        pro_cur = pro_cur->GetNextItem();
+    }
+    if (!pro_cur)
+    {
+        _preload_cursor = nullptr;
+        return;
+    }
+    const QString path = pro_cur->GetPath();
+    if (_map_items.find(path) == _map_items.end())
+    {
+        _map_items[path] = pro_cur;
+        emit SigUpPreList(pro_cur);
+    }
+    _preload_cursor = GetNextVisibleItem(pro_cur);
+}
+
+void PicAnimationWid::EnsureItemInPreList(QTreeWidgetItem *target_item)
+{
+    if (!target_item) return;
+    auto *target_pro = dynamic_cast<ProTreeItem*>(target_item);
+    if (!target_pro) return;
+
+    const QString target_path = target_pro->GetPath();
+    if (_map_items.find(target_path) != _map_items.end())
+    {
+        return;
+    }
+
+    // 按相册先后顺序推进缩略图加载游标直至覆盖目标节点，保证底部列表顺序与相册严格一致
+    while (_preload_cursor)
+    {
+        QTreeWidgetItem *just_loaded = _preload_cursor;
+        PreloadNextThumbnailStep();
+        if (just_loaded == target_item || _map_items.find(target_path) != _map_items.end())
+        {
+            return;
+        }
+    }
+
+    if (_map_items.find(target_path) == _map_items.end())
+    {
+        _map_items[target_path] = target_pro;
+        emit SigUpPreList(target_item);
+    }
+}
+
 // 设置并加载指定节点的图片数据（用于初始显示或选定展示）
 void PicAnimationWid::SetPixmap(QTreeWidgetItem *item)
 {
@@ -39,36 +138,45 @@ void PicAnimationWid::SetPixmap(QTreeWidgetItem *item)
         return;
     }
 
+    _factor = 0.0f;
+    _hold_ms = 0.0f;
+
     // 1. 获取当前图片路径并加载为旧图片 _pixmap1
     auto path = tree_item->GetPath();
     //存储图片的内存
     _pixmap1.load(path);
+    _scaled1 = QPixmap();
     //把当前展示的图片记录下来
     _cur_item = tree_item;
 
-    // 2. 缓存当前节点到映射表中，并通知底部预览缩略图列表
-    if (_map_items.find(path) == _map_items.end())
-    {
-        _map_items[path] = tree_item;
-        emit SigUpPreList(item); // 发送信号通知底部列表添加缩略图
-    }
+    // 2. 按相册顺序缓存当前节点到映射表中，并通知底部预览缩略图列表
+    EnsureItemInPreList(item);
 
     // 通知目录树同步高亮选中当前节点
     emit SigSelectItem(item);
 
-    // 3. 预加载下一张图片为 _pixmap2，为淡入淡出动画做准备
-    auto *next_item = tree_item->GetNextItem();
+    // 3. 预加载下一张可见图片为 _pixmap2，为转场动画做准备
+    auto *next_item = GetNextVisibleItem(tree_item);
+    if (!next_item && _b_loop && _first_item && _first_item != item)
+    {
+        next_item = dynamic_cast<ProTreeItem*>(_first_item);
+    }
     if (!next_item)
     {
+        _pixmap2 = QPixmap();
+        _scaled2 = QPixmap();
         return;
     }
 
     auto next_path = next_item->GetPath();
     _pixmap2.load(next_path);
-    if (_map_items.find(next_path) == _map_items.end())
+    _scaled2 = QPixmap();
+    EnsureItemInPreList(next_item);
+
+    // 首次进入轮播时预先填充首屏缩略图栏（最多18张），方便用户直接点击底部任意缩略图跳转
+    while (_preload_cursor && _map_items.size() < 18)
     {
-        _map_items[next_path] = next_item;
-        emit SigUpPreList(next_item); // 发送信号通知底部列表添加缩略图
+        PreloadNextThumbnailStep();
     }
 }
 
@@ -78,6 +186,7 @@ void PicAnimationWid::Start()
     emit SigStart();
     emit SigStartMusic(); // 伴随播放背景音乐
     _factor = 0.0f;
+    _hold_ms = 0.0f;
     _b_start = true;
     if (_timer)
     {
@@ -95,13 +204,14 @@ void PicAnimationWid::Stop()
         _timer->stop();
     }
     _factor = 0.0f;
+    _hold_ms = 0.0f;
     _b_start = false;
+    update();
 }
 
 // 手动切换到下一张
 void PicAnimationWid::SlidNext()
 {
-    Stop();
     if (!_cur_item)
     {
         return;
@@ -113,12 +223,18 @@ void PicAnimationWid::SlidNext()
         return;
     }
 
-    auto *next_item = cur_pro_item->GetNextItem();
+    auto *next_item = GetNextVisibleItem(cur_pro_item);
+    if (!next_item && _b_loop && _first_item)
+    {
+        next_item = dynamic_cast<ProTreeItem*>(_first_item);
+    }
     if (!next_item)
     {
         return;
     }
 
+    _factor = 0.0f;
+    _hold_ms = 0.0f;
     SetPixmap(next_item);
     update();
 }
@@ -126,7 +242,6 @@ void PicAnimationWid::SlidNext()
 // 手动切换到上一张
 void PicAnimationWid::SlidPre()
 {
-    Stop();
     if (!_cur_item)
     {
         return;
@@ -138,12 +253,18 @@ void PicAnimationWid::SlidPre()
         return;
     }
 
-    auto *pre_item = cur_pro_item->GetPreItem();
+    auto *pre_item = GetPreVisibleItem(cur_pro_item);
+    if (!pre_item && _b_loop && _last_item)
+    {
+        pre_item = dynamic_cast<ProTreeItem*>(_last_item);
+    }
     if (!pre_item)
     {
         return;
     }
 
+    _factor = 0.0f;
+    _hold_ms = 0.0f;
     SetPixmap(pre_item);
     update();
 }
@@ -158,13 +279,25 @@ void PicAnimationWid::TimeOut()
         return;
     }
 
-    // 每次递增 0.01（大约经过 1.5 秒完成淡入淡出全过程）
-    _factor += 0.01f;
+    // 渐进式预加载底部缩略图（每 tick 最多加载 1 张，不阻塞界面）
+    PreloadNextThumbnailStep();
+
+    // 1. 静态停留展示阶段：1.0x 标准速度下每张照片先清晰静止停留 2000ms，再启动转场过渡
+    const float kHoldDurationMs = 2000.0f;
+    if (_hold_ms < kHoldDurationMs)
+    {
+        _hold_ms += 15.0f * _speed_mult;
+        return;
+    }
+
+    // 2. 转场过渡动画阶段：每次递增 0.015 * _speed_mult（1.0x 标准速度下约 1.0 秒完成转场过渡）
+    _factor += 0.015f * _speed_mult;
 
     // 当 _factor >= 1.0 时，说明当前过渡已完成，切换到下一张图片
     if (_factor >= 1.0f)
     {
         _factor = 0.0f;
+        _hold_ms = 0.0f;
         //父类转换子类，这样子才可以调用子类自己构造的函数
         auto *cur_pro_item = dynamic_cast<ProTreeItem*>(_cur_item);
         if (!cur_pro_item)
@@ -173,16 +306,23 @@ void PicAnimationWid::TimeOut()
             update();
             return;
         }
-        //查找下一张图片
-        auto *next_pro_item = cur_pro_item->GetNextItem();
+        //查找下一张可见图片
+        auto *next_pro_item = GetNextVisibleItem(cur_pro_item);
+        if (!next_pro_item && _b_loop && _first_item)
+        {
+            next_pro_item = dynamic_cast<ProTreeItem*>(_first_item);
+        }
         if (!next_pro_item)
         {
-            Stop(); // 已到最后一张，停止轮播
+            Stop(); // 已到最后一张且未开启循环，停止轮播
             update();
             return;
         }
 
-        SetPixmap(next_pro_item); // 加载下一张
+        if (next_pro_item != _cur_item)
+        {
+            SetPixmap(next_pro_item); // 加载下一张
+        }
         update();
         return;
     }
@@ -191,20 +331,10 @@ void PicAnimationWid::TimeOut()
     update();
 }
 
-void PicAnimationWid::SlotSelectShow(QString &path)
-{
-    auto iter=_map_items.find(path);
-    if(iter==_map_items.end())
-    {
-        return;
-    }
-    UpSelectPixmap(iter.value());
-    update();
-}
-
-// 核心淡入淡出绘制事件
+// 核心多转场特效绘制事件
 void PicAnimationWid::paintEvent(QPaintEvent *event)
 {
+    Q_UNUSED(event);
     //判断:如果第一张图片没有绘制好，直接返回
     if (_pixmap1.isNull())
     {
@@ -216,14 +346,111 @@ void PicAnimationWid::paintEvent(QPaintEvent *event)
     painter.setRenderHint(QPainter::Antialiasing, true);
     // 开启双线性平滑插值
     painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-    //获取当前动画窗口在屏幕/父容器中的矩形几何信息
-    QRect rect = geometry();
+    //获取当前动画窗口自身的矩形几何信息
+    QRect rect = this->rect();
     int w = rect.width();
     int h = rect.height();
+    if (w <= 0 || h <= 0)
+    {
+        return;
+    }
 
-    // 1. 等比例缩放 _pixmap1
-    QPixmap scaled1 = _pixmap1.scaled(w, h, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    // 仅当窗口尺寸变化或新图片刚加载时才重新计算高清缩放，避免每 15ms 重复缩放卡顿
+    if (_last_size != rect.size())
+    {
+        _last_size = rect.size();
+        _scaled1 = QPixmap();
+        _scaled2 = QPixmap();
+    }
 
+    // 1. 等比例缩放 _pixmap1（使用缓存）
+    if (_scaled1.isNull())
+    {
+        _scaled1 = _pixmap1.scaled(w, h, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+    const QPixmap &scaled1 = _scaled1;
+    int x1 = (w - scaled1.width()) / 2;
+    int y1 = (h - scaled1.height()) / 2;
+
+    if (!_pixmap2.isNull() && _scaled2.isNull())
+    {
+        _scaled2 = _pixmap2.scaled(w, h, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+    const QPixmap &scaled2 = _scaled2;
+    int x2 = (w - scaled2.width()) / 2;
+    int y2 = (h - scaled2.height()) / 2;
+
+    // 若当前处于暂停态（_factor == 0）或没有下一张图，直接居中绘制当前图
+    if (_pixmap2.isNull() || _factor <= 0.0001f)
+    {
+        painter.drawPixmap(x1, y1, scaled1);
+        return;
+    }
+
+    // 根据当前选中的转场特效模式进行渲染
+    if (_effect_mode == EffectSlidePush)
+    {
+        // 特效 2：平滑左右推拉滑动（旧图向左滑出，新图从右侧滑入）
+        int offset = static_cast<int>(w * _factor);
+        painter.drawPixmap(x1 - offset, y1, scaled1);
+        painter.drawPixmap(x2 + (w - offset), y2, scaled2);
+        return;
+    }
+    else if (_effect_mode == EffectBlinds)
+    {
+        // 特效 3：百叶窗条带切换（将画布分为 12 个垂直条带逐步展开新图）
+        painter.drawPixmap(x1, y1, scaled1);
+        const int numStrips = 12;
+        const double stripW = static_cast<double>(w) / numStrips;
+        QPainterPath clipPath;
+        for (int i = 0; i < numStrips; ++i)
+        {
+            double sx = i * stripW;
+            double sw = stripW * _factor;
+            clipPath.addRect(sx, 0, sw, h);
+        }
+        painter.save();
+        painter.setClipPath(clipPath);
+        painter.fillRect(rect, QColor(46, 47, 48));
+        painter.drawPixmap(x2, y2, scaled2);
+        painter.restore();
+        return;
+    }
+    else if (_effect_mode == EffectIrisCircle)
+    {
+        // 特效 4：圆形光圈扩散（从画布中心向外圆形裁剪揭示新图）
+        painter.drawPixmap(x1, y1, scaled1);
+        double maxRadius = std::hypot(w / 2.0, h / 2.0);
+        double curRadius = maxRadius * _factor;
+        QPainterPath circlePath;
+        circlePath.addEllipse(QPointF(w / 2.0, h / 2.0), curRadius, curRadius);
+        painter.save();
+        painter.setClipPath(circlePath);
+        painter.fillRect(rect, QColor(46, 47, 48));
+        painter.drawPixmap(x2, y2, scaled2);
+        painter.restore();
+        return;
+    }
+    else if (_effect_mode == EffectKenBurns)
+    {
+        // 特效 5：Ken Burns 电影感推拉缩放镜头（旧图缓慢放大淡出，新图从微放大拉回正常并淡入）
+        painter.save();
+        double scale1 = 1.0 + 0.14 * _factor;
+        QSizeF s1(scaled1.width() * scale1, scaled1.height() * scale1);
+        QRectF r1((w - s1.width()) / 2.0, (h - s1.height()) / 2.0, s1.width(), s1.height());
+        painter.setOpacity(1.0 - _factor);
+        painter.drawPixmap(r1.toRect(), scaled1);
+
+        double scale2 = 1.12 - 0.12 * _factor;
+        QSizeF s2(scaled2.width() * scale2, scaled2.height() * scale2);
+        QRectF r2((w - s2.width()) / 2.0, (h - s2.height()) / 2.0, s2.width(), s2.height());
+        painter.setOpacity(_factor);
+        painter.drawPixmap(r2.toRect(), scaled2);
+        painter.restore();
+        return;
+    }
+
+    // 默认特效 1（EffectFade）：经典双图 Alpha 蒙版混合淡入淡出
     //创建一张尺寸与缩放后图片（scaled1）一模一样大的空白画板
     QPixmap alphaPixmap1(scaled1.size());
     //将整张画板全部填充为“纯透明色”（擦得干干净净）
@@ -244,17 +471,7 @@ void PicAnimationWid::paintEvent(QPaintEvent *event)
     p1.end();
 
     // 居中绘制淡出图片
-    int x1 = (w - scaled1.width()) / 2;
-    int y1 = (h - scaled1.height()) / 2;
     painter.drawPixmap(x1, y1, alphaPixmap1);
-
-    if (_pixmap2.isNull())
-    {
-        return;
-    }
-
-    // 2. 等比例缩放 _pixmap2
-    QPixmap scaled2 = _pixmap2.scaled(w, h, Qt::KeepAspectRatio, Qt::SmoothTransformation);
 
     // 计算透明度图 2（逐渐淡入，透明度 = _factor）
     QPixmap alphaPixmap2(scaled2.size());
@@ -270,8 +487,6 @@ void PicAnimationWid::paintEvent(QPaintEvent *event)
     p2.end();
 
     // 居中绘制淡入图片
-    int x2 = (w - scaled2.width()) / 2;
-    int y2 = (h - scaled2.height()) / 2;
     painter.drawPixmap(x2, y2, alphaPixmap2);
 }
 
@@ -289,32 +504,36 @@ void PicAnimationWid::UpSelectPixmap(QTreeWidgetItem *item)
         return;
     }
 
+    _factor = 0.0f;
+    _hold_ms = 0.0f;
     auto path = tree_item->GetPath();
     _pixmap1.load(path);
+    _scaled1 = QPixmap();
     _cur_item = tree_item;
 
-    if (_map_items.find(path) == _map_items.end())
-    {
-        _map_items[path] = tree_item;
-    }
+    EnsureItemInPreList(item);
+    emit SigSelectItem(item);
 
-    auto *next_item = tree_item->GetNextItem();
+    auto *next_item = GetNextVisibleItem(tree_item);
+    if (!next_item && _b_loop && _first_item && _first_item != item)
+    {
+        next_item = dynamic_cast<ProTreeItem*>(_first_item);
+    }
     if (!next_item)
     {
+        _pixmap2 = QPixmap();
+        _scaled2 = QPixmap();
         return;
     }
 
     auto next_path = next_item->GetPath();
     _pixmap2.load(next_path);
-    //查重防止重复添加成立是第一次出现，不成立说明出现过了
-    if (_map_items.find(next_path) == _map_items.end())
-    {
-        _map_items[next_path] = next_item;
-    }
+    _scaled2 = QPixmap();
+    EnsureItemInPreList(next_item);
 }
 
 // 响应缩略图选中切换
-void PicAnimationWid::SlotUpSelectShow(QString path)
+void PicAnimationWid::SlotUpSelectShow(const QString &path)
 {
     auto it = _map_items.find(path);
     if (it == _map_items.end())

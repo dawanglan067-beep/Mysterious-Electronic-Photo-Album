@@ -63,8 +63,6 @@
         <file>photo/7a96a759b1e628c15d2992e8da2bebf.jpg</file>
         <file>photo/e38198c26dc52b95a224af050b0951e.jpg</file>
         <file>photo/1daeb62f494e3a0f040ea34c18cd41f.jpg</file>
-        <!-- 背景音乐 -->
-        <file>music/bandicam 2025-04-13 14-51-23-941.mp3</file>
         <!-- 样式表 -->
         <file>style/style.qss</file>
     </qresource>

@@ -11,7 +11,7 @@
    </rect>
   </property>
   <property name="windowTitle">
-   <string>Dialog</string>
+   <string>关闭相册</string>
   </property>
   <layout class="QVBoxLayout" name="verticalLayout">
    <item>
@@ -30,14 +30,21 @@
    <item>
     <widget class="QLabel" name="label">
      <property name="text">
-      <string>从项目中删除文件</string>
+      <string>确定要从相册列表中关闭移除该相册吗？
+（默认仅从软件中移除，不影响本地磁盘文件）</string>
+     </property>
+     <property name="wordWrap">
+      <bool>true</bool>
      </property>
     </widget>
    </item>
    <item>
     <widget class="QCheckBox" name="checkBox">
      <property name="text">
-      <string>同时删除本地文件夹项目文件</string>
+      <string>同时将本地文件夹移入系统回收站 (⚠️ 危险操作，默认不勾选)</string>
+     </property>
+     <property name="checked">
+      <bool>false</bool>
      </property>
     </widget>
    </item>

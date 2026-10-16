@@ -1,8 +1,10 @@
 #include "picstatebtn.h"
 #include "const.h"
+#include <QMouseEvent>
 
 PicStateBtn::PicStateBtn(QWidget *parent)
     : QPushButton(parent)
+    , _cur_state(PicBtnStateNormal)
 {
 
 }
@@ -61,29 +63,52 @@ bool PicStateBtn::event(QEvent *e)
             }
             break;
 
-        // 鼠标按下按钮
+        // 鼠标左键按下按钮
         case QEvent::MouseButtonPress:
-            if (_cur_state < PicBtnState2Normal)
+            if (static_cast<QMouseEvent*>(e)->button() == Qt::LeftButton)
             {
-                setPressedIcon();  // 当前处于状态1 -> 显示状态1按下图标
-            }
-            else
-            {
-                setPressed2Icon(); // 当前处于状态2 -> 显示状态2按下图标
+                if (_cur_state < PicBtnState2Normal)
+                {
+                    setPressedIcon();  // 当前处于状态1 -> 显示状态1按下图标
+                }
+                else
+                {
+                    setPressed2Icon(); // 当前处于状态2 -> 显示状态2按下图标
+                }
             }
             break;
 
-        // 鼠标在按钮上释放（完成一次点击，执行状态大翻转：状态1 <-> 状态2）
+        // 鼠标左键在按钮区域内释放才翻转状态，移出区域释放则恢复原状态图标
         case QEvent::MouseButtonRelease:
-            if (_cur_state < PicBtnState2Normal)
+        {
+            auto *me = static_cast<QMouseEvent*>(e);
+            if (me->button() == Qt::LeftButton)
             {
-                setHover2Icon();   // 状态1 切换到 状态2（由于鼠标仍在按钮内，显示状态2悬浮图标）
-            }
-            else
-            {
-                setHoverIcon();    // 状态2 切换回 状态1（由于鼠标仍在按钮内，显示状态1悬浮图标）
+                if (this->rect().contains(me->pos()))
+                {
+                    if (_cur_state < PicBtnState2Normal)
+                    {
+                        setHover2Icon();   // 状态1 切换到 状态2（由于鼠标仍在按钮内，显示状态2悬浮图标）
+                    }
+                    else
+                    {
+                        setHoverIcon();    // 状态2 切换回 状态1（由于鼠标仍在按钮内，显示状态1悬浮图标）
+                    }
+                }
+                else
+                {
+                    if (_cur_state < PicBtnState2Normal)
+                    {
+                        setNormalIcon();
+                    }
+                    else
+                    {
+                        setNormal2Icon();
+                    }
+                }
             }
             break;
+        }
 
         default:
             break;
@@ -153,10 +178,24 @@ void PicStateBtn::setPressed2Icon()
 
 void PicStateBtn::SlotStart()
 {
-    setNormal2Icon();
+    if (this->underMouse())
+    {
+        setHover2Icon();
+    }
+    else
+    {
+        setNormal2Icon();
+    }
 }
 
 void PicStateBtn::SlotStop()
 {
-    setNormalIcon();
+    if (this->underMouse())
+    {
+        setHoverIcon();
+    }
+    else
+    {
+        setNormalIcon();
+    }
 }

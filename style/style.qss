@@ -66,7 +66,7 @@ ProTree {
     color: rgb(231,231,231);
 }
 
-QLabel#label_pro {
+QLabel#label_pro, QLabel#lable_pro {
     color: rgb(231,231,231);
     border-color: #9F9F9F;
     border-style: dotted;
@@ -90,17 +90,6 @@ QTreeWidget::item:selected {
 }
 
 
-/*
-QTreeWidget::branch:open:has-children:!has-siblings,
-QTreeWidget::branch:open:has-children:has-siblings
-{image:url(qrc:/photo/f10e7d721918671061847808f9b1a5c.jpg);}
-
-QTreeWidget::branch:closed:has-children:!has-siblings,
-QTreeWidget::branch:closed:has-children:has-siblings
-{image:url(qrc:/photo/f10e7d721918671061847808f9b1a5c.jpg);}
-*/
-
-
 PicShow {
     border-color: #9F9F9F;
     border-style: solid;
@@ -109,14 +98,82 @@ PicShow {
     background: rgb(64,66,68);
 }
 
+#canvasToolbar {
+    background-color: rgb(42, 44, 47);
+    border: 1px solid rgb(78, 81, 86);
+    border-radius: 6px;
+}
 
+#canvasToolBtn {
+    background-color: rgb(56, 59, 64);
+    color: rgb(225, 228, 232);
+    border: 1px solid rgb(88, 92, 98);
+    border-radius: 4px;
+    padding: 3px 10px;
+    font-size: 12px;
+}
 
-#nextBtn,#previousBtn,#closeBtn,#playBtn,#slidpreBtn,#slidnextBtn {
+#canvasToolBtn:hover {
+    background-color: rgb(45, 105, 168);
+    border-color: rgb(80, 145, 215);
+}
+
+#canvasToolBtn:pressed, #canvasToolBtn:checked {
+    background-color: rgb(35, 85, 140);
+    border-color: rgb(100, 165, 235);
+}
+
+#inspectorPanel {
+    background-color: rgb(43, 45, 48);
+    border-left: 1px solid rgb(82, 85, 90);
+}
+
+#inspectorSectionTitle {
+    color: rgb(235, 238, 242);
+    font-weight: bold;
+    font-size: 13px;
+    padding-top: 2px;
+}
+
+#studioCombo, QComboBox {
+    background-color: rgb(58, 60, 65);
+    color: rgb(230, 233, 238);
+    border: 1px solid rgb(95, 98, 105);
+    border-radius: 4px;
+    padding: 3px 8px;
+}
+
+QComboBox QAbstractItemView {
+    background-color: rgb(50, 52, 56);
+    color: rgb(230, 233, 238);
+    selection-background-color: rgb(38, 95, 153);
+}
+
+QSlider::groove:horizontal {
+    height: 4px;
+    background: rgb(80, 84, 90);
+    border-radius: 2px;
+}
+
+QSlider::sub-page:horizontal {
+    background: rgb(55, 130, 210);
+    border-radius: 2px;
+}
+
+QSlider::handle:horizontal {
+    background: rgb(225, 230, 238);
+    border: 1px solid rgb(55, 130, 210);
+    width: 12px;
+    margin: -5px 0;
+    border-radius: 6px;
+}
+
+#nextBtn,#previousBtn,#closeBtn,#playBtn,#slidepreBtn,#slidenextBtn,#slidpreBtn,#slidnextBtn {
     border: 0px;
 }
 
 
-SlidShowDlg{
+SlideShowDlg, SlidShowDlg{
     color:rgb(231,231,231);
     background-color:rgb(46,47,48);
 
@@ -136,11 +193,11 @@ SlidShowDlg{
     background:rgb(38,95,153);
 }
 
-#slidprewid{
+#slideprewid,#slidprewid{
     margin-left:10px;
 }
 
-#slidnext{
+#slidenextwid,#slidnext{
     margin-right:10px;
 }
 
@@ -151,4 +208,40 @@ SlidShowDlg{
 #preListWidget::item:selected{
     border:2px solid #ffffff;
 }
+
+RemoveProDialog {
+    background-color: rgb(46, 47, 48);
+    color: rgb(231, 231, 231);
+}
+
+RemoveProDialog QLabel {
+    color: rgb(231, 231, 231);
+    font-size: 13px;
+}
+
+RemoveProDialog QCheckBox {
+    color: rgb(255, 120, 120);
+    font-weight: bold;
+    spacing: 8px;
+    padding: 6px;
+}
+
+RemoveProDialog QCheckBox::indicator {
+    width: 18px;
+    height: 18px;
+    border: 1px solid rgb(140, 140, 140);
+    border-radius: 3px;
+    background-color: rgb(60, 60, 63);
+}
+
+RemoveProDialog QCheckBox::indicator:hover {
+    border-color: rgb(60, 140, 230);
+}
+
+RemoveProDialog QCheckBox::indicator:checked {
+    background-color: rgb(215, 60, 60);
+    border-color: rgb(255, 80, 80);
+}
+
+
 

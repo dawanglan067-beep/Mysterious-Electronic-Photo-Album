@@ -16,6 +16,11 @@ public:
     explicit SlideShowDlg(QWidget *parent, QTreeWidgetItem* first_item, QTreeWidgetItem* last_item);
     ~SlideShowDlg();
 
+protected:
+    void keyPressEvent(QKeyEvent *event) override;
+    void closeEvent(QCloseEvent *event) override;
+    void reject() override;
+
 private:
     Ui::SlideShowDlg *ui;
     QTreeWidgetItem* _first_item;

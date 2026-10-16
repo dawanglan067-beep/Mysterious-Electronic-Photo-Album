@@ -21,7 +21,7 @@ public slots:
     void SlotUpSelect(QTreeWidgetItem*tree_item);
     void SlotItemPressed(QListWidgetItem*item);
 signals:
-    void SigUpSelectShow(QString &path);
+    void SigUpSelectShow(const QString &path);
 };
 
 #endif // PROLISTWID_H

@@ -12,8 +12,8 @@ ProSetPage::ProSetPage(QWidget *parent)
     registerField("proPath",ui->lineEdit_2);
     registerField("proName*",ui->lineEdit);
     //做连接
-    connect(ui->lineEdit,&QLineEdit::textEdited,this,&ProSetPage::completeChanged);
-    connect(ui->lineEdit_2,&QLineEdit::textEdited,this,&ProSetPage::completeChanged);
+    connect(ui->lineEdit,&QLineEdit::textChanged,this,&ProSetPage::completeChanged);
+    connect(ui->lineEdit_2,&QLineEdit::textChanged,this,&ProSetPage::completeChanged);
     QString curPath=QDir::currentPath();//获取当前程序运行时的“工作目录
     ui->lineEdit_2->setText(curPath);//默认路径
     //设置光标

@@ -17,7 +17,8 @@ public:
     MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
 protected:
-    virtual void resizeEvent(QResizeEvent*event);
+    virtual void resizeEvent(QResizeEvent*event) override;
+    virtual void keyPressEvent(QKeyEvent *event) override;
 private:
     Ui::MainWindow *ui;
     QWidget *_protree;
