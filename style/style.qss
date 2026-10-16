@@ -2,6 +2,41 @@ MainWindow {
     background-color: rgb(46,47,48);
 }
 
+/* Photo wall and album export use the existing dark palette. */
+QWidget#photoWall, QDialog#albumExportDialog {
+    background-color: rgb(46,47,48);
+    color: rgb(231,231,231);
+}
+QWidget#photoWall QLabel, QDialog#albumExportDialog QLabel {
+    color: rgb(231,231,231);
+    background: transparent;
+}
+QListView#photoWallView, QDialog#albumExportDialog QTableWidget {
+    background-color: rgb(37,38,40);
+    color: rgb(231,231,231);
+    border: 1px solid rgb(75,78,82);
+    selection-background-color: rgb(39,96,154);
+    selection-color: white;
+}
+QListView#photoWallView::item { border-radius: 5px; padding: 4px; }
+QListView#photoWallView::item:hover { background: rgb(55,60,68); }
+QListView#photoWallView::item:selected { background: rgb(39,96,154); }
+QWidget#photoWall QPushButton, QDialog#albumExportDialog QPushButton {
+    color: rgb(231,231,231);
+    background: rgb(58,61,66);
+    border: 1px solid rgb(90,94,100);
+    border-radius: 4px;
+    padding: 7px 10px;
+}
+QWidget#photoWall QPushButton:hover, QDialog#albumExportDialog QPushButton:hover { background: rgb(65,83,104); }
+QWidget#photoWall QPushButton:disabled { color: rgb(120,125,133); }
+QDialog#albumExportDialog QLineEdit, QDialog#albumExportDialog QComboBox {
+    background: rgb(58,61,66); color: rgb(231,231,231); padding: 5px;
+}
+QToolBar { background: rgb(46,47,48); color: rgb(231,231,231); border: none; spacing: 8px; }
+QToolBar QToolButton { color: rgb(231,231,231); padding: 6px; }
+QToolBar QToolButton:hover { background: rgb(65,83,104); }
+
 /* 菜单栏颜色 */
 QMenuBar {
     color: rgb(231,231,231); /* 文字颜色 */

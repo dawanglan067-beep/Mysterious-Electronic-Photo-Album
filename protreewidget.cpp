@@ -1,4 +1,5 @@
 #include "protreewidget.h"
+#include "albumfolderpicker.h"
 #include <QDir>
 #include <QIcon>
 #include <QHeaderView>
@@ -130,6 +131,7 @@ ProTreeWidget::ProTreeWidget(QWidget *parent): QTreeWidget(parent)
 
     // 支持键盘上下方向键或单击切换当前树节点时，联动更新右侧图片预览
     connect(this, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem *current, QTreeWidgetItem *) {
+        emit SigPhotoSetChanged();
         if (!current || current->type() != TreeItemPic || current->isHidden())
         {
             return;
@@ -234,6 +236,7 @@ void ProTreeWidget::AddProToTree(const QString name, const QString path)
     item->setData(0, Qt::DecorationRole, QIcon(":/icon/line/album.svg"));
     item->setData(0, Qt::ToolTipRole, file_path);
     this->addTopLevelItem(item);
+    emit SigPhotoSetChanged();
 
     // 若当前尚未设置活动项目，默认将新建相册设为活动项目
     if (!_active_item)
@@ -320,30 +323,20 @@ void ProTreeWidget::SlotDoubleClickItem(QTreeWidgetItem *doubleItem, int col)
 
 void ProTreeWidget::SlotImport()
 {
-    QFileDialog file_dialog;
-    file_dialog.setFileMode(QFileDialog::Directory);
-    file_dialog.setWindowTitle(tr("选择导入的文件夹"));
-    QString path = "";
     if (!_right_btn_item)
     {
         qDebug() << "_right_btn_item is empty!";
         return;
     }
-    QTreeWidgetItem *target_pro_item = _right_btn_item;
-    path = dynamic_cast<ProTreeItem*>(target_pro_item)->GetPath();
-    file_dialog.setDirectory(path);
-    file_dialog.setViewMode(QFileDialog::Detail);
-
-    QStringList fileNames;
-    if (file_dialog.exec())
-    {
-        fileNames = file_dialog.selectedFiles();
-    }
-    if (fileNames.length() <= 0)
-    {
-        return;
-    }
-    QString import_path = fileNames.at(0);
+    auto *target_pro_item = dynamic_cast<ProTreeItem*>(_right_btn_item);
+    if (!target_pro_item) return;
+    const QString path = target_pro_item->GetPath();
+    const auto selection = SelectAlbumFolder(
+        this, tr("导入照片 — 进入来源目录后点击“选择当前文件夹”"), path);
+    if (!selection.error.isEmpty())
+        QMessageBox::warning(this, tr("导入文件"), selection.error);
+    if (selection.path.isEmpty()) return;
+    const QString import_path = selection.path;
 
     // 防御性校验：若用户选择了相册自身或其内部子目录作为导入源，直接提示并拦截
     QString cleanImport = QFileInfo(import_path).canonicalFilePath();
@@ -667,6 +660,10 @@ void ProTreeWidget::SlotFinishOpenProgress()
     }
     ApplyTreeFilter();
 
+    // Opening an album must move the current album even if another photo is
+    // already selected; the gallery derives its scope from currentItem().
+    if (openedRoot) this->setCurrentItem(openedRoot);
+
     // 打开相册后，若当前画布尚未展示任何图片，自动选中并展示该相册的第一张可见照片
     if (!_selecetd_item && openedRoot)
     {
@@ -685,6 +682,7 @@ void ProTreeWidget::SlotFinishOpenProgress()
 
     SaveWorkspaceSettings();
     _thread_open_pro.reset();
+    if (openedRoot) emit SigAlbumOpened(openedRoot->GetPath());
 }
 
 void ProTreeWidget::SlotCancelOpenProgress()
@@ -1651,6 +1649,52 @@ void ProTreeWidget::ApplyTreeFilter()
         FilterItemRecursive(topItem);
         topItem->setHidden(false); // 顶层相册项目始终可见
     }
+    emit SigPhotoSetChanged();
+}
+
+QString ProTreeWidget::CurrentAlbumRootPath() const
+{
+    auto *item = currentItem();
+    if (!item) item = _active_item;
+    if (!item && topLevelItemCount() > 0) item = topLevelItem(0);
+    while (item && item->parent()) item = item->parent();
+    auto *root = dynamic_cast<ProTreeItem*>(item);
+    return root ? root->GetPath() : QString();
+}
+
+QList<PhotoEntry> ProTreeWidget::VisiblePhotos(const QString &albumRootPath) const
+{
+    QList<PhotoEntry> photos;
+    const auto collect = [&photos](auto &&self, QTreeWidgetItem *item) -> void {
+        if (!item || item->isHidden()) return;
+        if (item->type() == TreeItemPic) {
+            if (auto *photo = dynamic_cast<ProTreeItem*>(item)) photos.append({photo->GetPath(), QString()});
+        }
+        for (int i = 0; i < item->childCount(); ++i) self(self, item->child(i));
+    };
+    for (int i = 0; i < topLevelItemCount(); ++i) {
+        auto *root = dynamic_cast<ProTreeItem*>(topLevelItem(i));
+        if (root && root->GetPath() == albumRootPath) collect(collect, root);
+    }
+    return photos;
+}
+
+bool ProTreeWidget::SelectPhotoByPath(const QString &path)
+{
+    QTreeWidgetItemIterator it(this);
+    while (*it) {
+        auto *photo = dynamic_cast<ProTreeItem*>(*it);
+        if (photo && photo->type() == TreeItemPic && !photo->isHidden() && photo->GetPath() == path) {
+            const bool alreadySelected = _selecetd_item == photo;
+            setCurrentItem(photo);
+            scrollToItem(photo);
+            _selecetd_item = photo;
+            if (alreadySelected) emit SigUpdateSelected(path);
+            return true;
+        }
+        ++it;
+    }
+    return false;
 }
 
 bool ProTreeWidget::FilterItemRecursive(QTreeWidgetItem *item)

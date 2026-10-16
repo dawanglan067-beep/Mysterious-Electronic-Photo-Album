@@ -5,9 +5,20 @@
 #include <QKeyEvent>
 #include "wizard.h"
 #include"protree.h"
-#include<QFileDialog>
+#include "albumfolderpicker.h"
+#include <QStandardPaths>
+#include <QFileInfo>
 #include"protreewidget.h"
 #include"picshow.h"
+#include "photowallwidget.h"
+#include "albumexportdialog.h"
+#include "albumpdfexporter.h"
+#include "const.h"
+#include <QStackedWidget>
+#include <QToolBar>
+#include <QProgressDialog>
+#include <QMessageBox>
+#include <QTimer>
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::MainWindow)
@@ -76,7 +87,76 @@ MainWindow::MainWindow(QWidget *parent)
     connect(this,&MainWindow::SigOpenPro,pro_tree_widget,&ProTreeWidget::SlotOpenPro);
 
     _picshow=new PicShow();
-    ui->picLayout->addWidget(_picshow);
+    _photo_pages = new QStackedWidget(this);
+    _photo_wall = new PhotoWallWidget(_photo_pages);
+    _photo_pages->addWidget(_photo_wall);
+    _photo_pages->addWidget(_picshow);
+    ui->picLayout->addWidget(_photo_pages);
+    auto *viewToolbar = new QToolBar(tr("相册视图"), this);
+    viewToolbar->setMovable(false);
+    viewToolbar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    addToolBar(viewToolbar);
+    auto *wallAction = viewToolbar->addAction(QIcon(":/icon/line/album.svg"), tr("照片墙"));
+    auto *detailAction = viewToolbar->addAction(QIcon(":/icon/line/core.svg"), tr("单图浏览"));
+    connect(wallAction, &QAction::triggered, this, [this]() { _photo_pages->setCurrentWidget(_photo_wall); });
+    connect(detailAction, &QAction::triggered, this, [this]() {
+        _photo_pages->setCurrentWidget(_picshow);
+        static_cast<PicShow*>(_picshow)->ReloadPic();
+    });
+    connect(pro_tree_widget, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem *item, int) {
+        if (item && item->type() == TreeItemPic) {
+            _photo_pages->setCurrentWidget(_picshow);
+            static_cast<PicShow*>(_picshow)->ReloadPic();
+        }
+    });
+    const auto refreshWall = [this, pro_tree_widget]() {
+        _photo_wall->SetPhotos(pro_tree_widget->VisiblePhotos(pro_tree_widget->CurrentAlbumRootPath()));
+    };
+    connect(pro_tree_widget, &ProTreeWidget::SigPhotoSetChanged, this, refreshWall, Qt::QueuedConnection);
+    connect(pro_tree_widget, &ProTreeWidget::SigAlbumOpened, this, [this, refreshWall](const QString &) {
+        refreshWall();
+        _photo_pages->setCurrentWidget(_photo_wall);
+    });
+    QTimer::singleShot(0, this, refreshWall);
+    connect(_photo_wall, &PhotoWallWidget::SigOpenPhoto, this, [this, pro_tree_widget](const QString &path) {
+        if (pro_tree_widget->SelectPhotoByPath(path)) {
+            _photo_pages->setCurrentWidget(_picshow);
+            static_cast<PicShow*>(_picshow)->ReloadPic();
+        }
+    });
+    connect(_photo_wall, &PhotoWallWidget::SigExportRequested, this, [this]() {
+        const QStringList paths = _photo_wall->SelectedPaths();
+        if (paths.isEmpty()) return;
+        AlbumExportDialog dialog(paths, this);
+        if (dialog.exec() != QDialog::Accepted) return;
+        const AlbumExportOptions options = dialog.Options();
+        AlbumPdfExporter exporter(options);
+        QProgressDialog progress(tr("正在生成 PDF 纪念相册…"), tr("取消"), 0, int(options.photos.size()), this);
+        progress.setWindowTitle(tr("导出相册"));
+        progress.setWindowModality(Qt::ApplicationModal);
+        progress.setMinimumDuration(0);
+        progress.setAutoClose(false);
+        progress.setAutoReset(false);
+        bool success = false;
+        bool cancelled = false;
+        QString message;
+        connect(&progress, &QProgressDialog::canceled, &exporter, &AlbumPdfExporter::Cancel);
+        connect(&exporter, &AlbumPdfExporter::SigProgress, &progress, [&progress](int completed, int) { progress.setValue(completed); });
+        connect(&exporter, &AlbumPdfExporter::SigResult, &progress, [&](bool ok, bool wasCancelled, const QString &result) {
+            success = ok;
+            cancelled = wasCancelled;
+            message = result;
+        });
+        connect(&exporter, &QThread::finished, &progress, &QDialog::accept);
+        exporter.start();
+        progress.exec();
+        // Reject/close/cancel must finish the worker before its stack lifetime ends.
+        if (exporter.isRunning()) exporter.Cancel();
+        exporter.wait();
+        if (success) QMessageBox::information(this, tr("导出完成"), tr("相册已保存：\n%1").arg(message));
+        else if (!cancelled && !progress.wasCanceled() && !message.isEmpty())
+            QMessageBox::warning(this, tr("导出失败"), message);
+    });
     auto *pro_pic_show=dynamic_cast<PicShow*>(_picshow);
     connect(pro_tree_widget,&ProTreeWidget::SigUpdateSelected,pro_pic_show,&PicShow::SlotSelectItem);
     connect(pro_pic_show,&PicShow::SigNextClicked,pro_tree_widget,&ProTreeWidget::SlotNextShow);
@@ -130,7 +210,7 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
 {
     auto *pro_tree = dynamic_cast<ProTree*>(_protree);
     auto *pro_tree_widget = pro_tree ? dynamic_cast<ProTreeWidget*>(pro_tree->GetTreeWidget()) : nullptr;
-    if (pro_tree_widget)
+    if (pro_tree_widget && _photo_pages->currentWidget() == _picshow)
     {
         if (event->key() == Qt::Key_Left)
         {
@@ -163,21 +243,11 @@ void MainWindow::SlotCreatePro(bool checked)
 
 void MainWindow::SlotOpenPro(bool)
 {
-    QFileDialog file_dialog;
-    //设置文件对话框的形式是只能选择文件夹
-    file_dialog.setFileMode(QFileDialog::Directory);//Directory:文件夹
-    file_dialog.setWindowTitle(tr("选择导入的文件夹"));
-    file_dialog.setDirectory(QDir::currentPath());
-    file_dialog.setViewMode(QFileDialog::Detail);
-    QStringList fileNames;
-    if(file_dialog.exec())
-    {
-        fileNames=file_dialog.selectedFiles();
-    }
-    if(fileNames.length()<=0)
-    {
-        return;
-    }
-    QString import_path=fileNames.at(0);
-    emit SigOpenPro(import_path);
+    const auto selection = SelectAlbumFolder(
+        this, tr("打开相册 — 进入目录后点击“选择当前文件夹”"),
+        QStandardPaths::writableLocation(QStandardPaths::PicturesLocation));
+    if (!selection.error.isEmpty())
+        QMessageBox::warning(this, tr("打开相册"), selection.error);
+    if (!selection.path.isEmpty())
+        emit SigOpenPro(selection.path);
 }

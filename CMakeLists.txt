@@ -38,6 +38,13 @@ qt_add_executable(Album
     mainwindow.cpp
     mainwindow.h
     mainwindow.ui
+    albumfolderpicker.h albumfolderpicker.cpp
+    photoentry.h
+    photowallmodel.h photowallmodel.cpp
+    photowallwidget.h photowallwidget.cpp
+    thumbnailloader.h thumbnailloader.cpp
+    albumexportdialog.h albumexportdialog.cpp
+    albumpdfexporter.h albumpdfexporter.cpp
     rc.qrc
     app.rc
     wizard.h wizard.cpp wizard.ui
@@ -59,6 +66,15 @@ qt_add_executable(Album
     prelistitem.h prelistitem.cpp
 )
 
+# Some Qt Creator/MSVC environments emit /showIncludes in an encoding that
+# Ninja does not recognize. Keep project headers as explicit dependencies too:
+# a stale main.cpp can otherwise allocate an older, smaller MainWindow on the
+# stack while its new constructor writes beyond that allocation.
+file(GLOB _album_project_headers CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
+file(GLOB _album_project_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
+set_property(SOURCE ${_album_project_sources} APPEND PROPERTY
+    OBJECT_DEPENDS "${_album_project_headers}")
+
 target_link_libraries(Album
     PRIVATE
         Qt::Core
@@ -66,6 +82,7 @@ target_link_libraries(Album
         Qt::Multimedia
         Qt::Svg
         winmm
+        ole32 shell32 uuid
 )
 
 target_include_directories(Album
@@ -87,3 +104,31 @@ qt_generate_deploy_app_script(
     NO_UNSUPPORTED_PLATFORM_ERROR
 )
 install(SCRIPT ${deploy_script})
+
+option(ALBUM_BUILD_FEATURE_TESTS "Build photo wall and PDF regression tests" OFF)
+if(ALBUM_BUILD_FEATURE_TESTS)
+    enable_testing()
+    find_package(Qt6 REQUIRED COMPONENTS Test)
+    qt_add_executable(AlbumNativePickerTests tests/nativefolderpickertest.cpp albumfolderpicker.cpp albumfolderpicker.h)
+    target_include_directories(AlbumNativePickerTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(AlbumNativePickerTests PRIVATE Qt::Widgets ole32 shell32 uuid)
+    get_target_property(_album_test_sources Album SOURCES)
+    list(REMOVE_ITEM _album_test_sources main.cpp protreewidget.cpp)
+    list(FILTER _album_test_sources EXCLUDE REGEX "\\$<")
+    # Tests must never read/write the user's real album or music preferences.
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/protreewidget.cpp" _album_test_tree)
+    string(REPLACE "AlbumStudio" "AlbumFeatureTests" _album_test_tree "${_album_test_tree}")
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/feature_test_tree.cpp" "${_album_test_tree}")
+    qt_add_executable(AlbumFeatureTests
+        tests/albumfeaturetests.cpp
+        ${_album_test_sources}
+        "${CMAKE_CURRENT_BINARY_DIR}/feature_test_tree.cpp"
+    )
+    set_target_properties(AlbumFeatureTests PROPERTIES AUTOUIC_SEARCH_PATHS "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_include_directories(AlbumFeatureTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(AlbumFeatureTests PRIVATE Qt::Widgets Qt::Svg Qt::Multimedia Qt::Test winmm ole32 shell32 uuid)
+    add_test(NAME AlbumFeatures COMMAND AlbumFeatureTests)
+    get_filename_component(_album_qt_root "${Qt6_DIR}/../../.." ABSOLUTE)
+    set_tests_properties(AlbumFeatures PROPERTIES ENVIRONMENT
+        "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${_album_qt_root}/plugins;QT_FORCE_STDERR_LOGGING=1")
+endif()

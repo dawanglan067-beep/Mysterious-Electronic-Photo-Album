@@ -8,6 +8,8 @@ namespace Ui {
 class MainWindow;
 }
 QT_END_NAMESPACE
+class QStackedWidget;
+class PhotoWallWidget;
 
 class MainWindow : public QMainWindow
 {
@@ -23,6 +25,8 @@ private:
     Ui::MainWindow *ui;
     QWidget *_protree;
     QWidget*_picshow;
+    QStackedWidget *_photo_pages = nullptr;
+    PhotoWallWidget *_photo_wall = nullptr;
 private slots:
     void SlotCreatePro(bool checked);
     void SlotOpenPro(bool);

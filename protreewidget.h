@@ -8,6 +8,7 @@
 #include"opentreethread.h"
 #include <QMediaPlayer>
 #include <QAudioOutput>
+#include "photoentry.h"
 class SlideShowDlg;
 class ProTreeWidget : public QTreeWidget
 {
@@ -16,6 +17,9 @@ public:
     ProTreeWidget(QWidget *parent=nullptr);
     ~ProTreeWidget();
     void AddProToTree(const QString name,const QString path);
+    QString CurrentAlbumRootPath() const;
+    QList<PhotoEntry> VisiblePhotos(const QString &albumRootPath) const;
+    bool SelectPhotoByPath(const QString &path);
 private:
     QSet<QString> _set_path;
     QTreeWidgetItem*_right_btn_item;
@@ -116,6 +120,8 @@ public slots:
     void SlotSetOnlyFavorites(bool onlyFav);
     void SlotDetectDuplicates();
 signals:
+    void SigAlbumOpened(const QString &path);
+    void SigPhotoSetChanged();
     void SigCancelProgress();
     void SigCancelOpenProgress();
     void SigUpdateSelected(const QString &);
