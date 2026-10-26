@@ -73,6 +73,8 @@ qt_add_executable(Album
     picanimationwid.h picanimationwid.cpp
     prolistwid.h prolistwid.cpp
     prelistitem.h prelistitem.cpp
+    photoeditdocument.h photoeditdocument.cpp
+    cropdialog.h cropdialog.cpp
 )
 
 # Some Qt Creator/MSVC environments emit /showIncludes in an encoding that

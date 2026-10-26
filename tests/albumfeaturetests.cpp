@@ -6,11 +6,16 @@
 #include "protreewidget.h"
 #include "protreeitem.h"
 #include "picshow.h"
+#include "cropdialog.h"
+#include <QDialogButtonBox>
+#include <QWheelEvent>
+#include <QTransform>
 #include "imageprocessor.h"
 #include "duplicatephotofinder.h"
 #include "workspacesettings.h"
 #include "musiccontroller.h"
 #include <QSlider>
+#include <QComboBox>
 #include "const.h"
 #include <QSettings>
 #include <QStackedWidget>
@@ -133,6 +138,372 @@ int main(int argc, char **argv)
         controller.SlotPauseMusic();
         controller.SlotStopMusic();
         check(!controller.IsMusicPlaying(), "music stop leaves controller idle");
+    }
+
+    {
+        QImage source(80, 60, QImage::Format_ARGB32);
+        source.fill(qRgba(70, 100, 130, 255));
+        const QString first = temporary.filePath("document-first.png");
+        const QString second = temporary.filePath("document-second.png");
+        check(source.save(first) && source.save(second), "create editor fixtures");
+        PhotoEditDocument document;
+        check(document.load(first) && document.Render() == source, "document loads original without changes");
+        document.setParameters({25, -15, 30, ImageProcessor::FilterInvert});
+        check(document.Render() == ImageProcessor::Apply(source, document.parameters())
+              && document.sourceImage() == source, "document renders edits without changing original");
+        check(document.load(second) && document.parameters().brightness == 0
+              && document.parameters().filter == ImageProcessor::FilterNone,
+              "switching source resets document parameters");
+        auto parameters = document.parameters();
+        parameters.brightness = 50;
+        document.setParameters(parameters);
+        check(!document.load(temporary.filePath("missing.png"))
+              && document.sourceImage().isNull() && document.sourcepath().isEmpty()
+              && document.Render().isNull() && document.parameters().brightness == 0,
+              "failed load clears old source and edits");
+        document.load(first);
+        parameters = document.parameters();
+        parameters.brightness = 50;
+        document.setParameters(parameters);
+        document.clear();
+        check(document.sourceImage().isNull() && document.Render().isNull()
+              && document.sourcepath().isEmpty() && document.parameters().brightness == 0,
+              "clear removes all document data");
+
+        PicShow viewer;
+        viewer.resize(1100, 750);
+        viewer.show();
+        viewer.SlotSelectItem(first);
+        app.processEvents();
+        auto *canvas = viewer.findChild<QLabel*>("label");
+        const auto sliders = viewer.findChildren<QSlider*>();
+        auto *filter = viewer.findChild<QComboBox*>("studioCombo");
+        check(canvas && sliders.size() == 3 && filter, "editor controls available");
+        if (canvas && sliders.size() == 3 && filter) {
+            const auto centerPixel = [&]() {
+                const QImage rendered = canvas->grab().toImage();
+                return rendered.pixelColor(rendered.width() / 2, rendered.height() / 2);
+            };
+            const QColor original = centerPixel();
+            bool adjustmentsChangePixels = true;
+            for (auto *slider : sliders) {
+                slider->setValue(40);
+                adjustmentsChangePixels &= centerPixel() != original;
+                QMetaObject::invokeMethod(&viewer, "SlotResetAlgorithms", Qt::DirectConnection);
+                adjustmentsChangePixels &= slider->value() == 0 && centerPixel() == original;
+            }
+            check(adjustmentsChangePixels, "all sliders affect rendered pixels and reset restores source");
+            filter->setCurrentIndex(filter->findData(ImageProcessor::FilterInvert));
+            check(centerPixel() != original, "filter affects document-driven preview");
+            viewer.SlotUpdatePic(second);
+            check(filter->currentData().toInt() == ImageProcessor::FilterNone
+                  && centerPixel() == original, "switching image clears filter and rendered effect");
+            sliders.first()->setValue(40);
+            viewer.Clear();
+            const QColor empty = centerPixel();
+            check(empty != original && sliders.first()->value() == 0,
+                  "clear removes preview and resets controls");
+            viewer.SlotSelectItem(first);
+            sliders.first()->setValue(40);
+            viewer.SlotSelectItem(temporary.filePath("missing.png"));
+            check(centerPixel() == empty && sliders.first()->value() == 0,
+                  "failed viewer load removes stale preview");
+            viewer.SlotSelectItem(first);
+            check(centerPixel() == original, "viewer recovers after failed load");
+        }
+
+        if (canvas && sliders.size() == 3 && filter) {
+            auto *history = viewer.findChild<QUndoStack*>("photoUndoStack");
+            auto *undoButton = viewer.findChild<QPushButton*>("photoUndoButton");
+            auto *redoButton = viewer.findChild<QPushButton*>("photoRedoButton");
+            const auto invoke = [&](const char *slot) {
+                return QMetaObject::invokeMethod(&viewer, slot, Qt::DirectConnection);
+            };
+            viewer.SlotSelectItem(first);
+            check(history && undoButton && redoButton && !undoButton->isEnabled()
+                  && !redoButton->isEnabled(), "history starts empty with disabled buttons");
+            if (history && undoButton && redoButton) {
+                const auto preview = [&]() { return canvas->grab().toImage(); };
+                const QImage original = preview();
+                // Simulate a slider gesture with multiple live preview updates.
+                sliders.first()->setSliderDown(true);
+                sliders.first()->setValue(10);
+                sliders.first()->setValue(25);
+                sliders.first()->setValue(40);
+                sliders.first()->setSliderDown(false);
+                const QImage adjusted = preview();
+                check(history->count() == 1 && adjusted != original && undoButton->isEnabled(),
+                      "one slider drag produces one history command");
+                undoButton->click();
+                check(sliders.first()->value() == 0 && preview() == original
+                      && redoButton->isEnabled(), "undo restores controls and rendered pixels");
+                redoButton->click();
+                check(sliders.first()->value() == 40 && preview() == adjusted,
+                      "redo restores slider result");
+                filter->setCurrentIndex(filter->findData(ImageProcessor::FilterInvert));
+                const QImage filtered = preview();
+                invoke("SlotResetAlgorithms");
+                check(preview() == original && filter->currentData().toInt() == ImageProcessor::FilterNone,
+                      "reset restores defaults");
+                invoke("SlotUndo");
+                check(preview() == filtered && sliders.first()->value() == 40,
+                      "reset itself can be undone");
+                invoke("SlotUndo"); // filter
+                invoke("SlotUndo"); // slider
+                check(preview() == original && history->index() == 0, "multiple undo reaches original");
+                sliders.first()->setValue(-20);
+                check(!history->canRedo() && history->count() == 1, "new branch discards redo history");
+                const int count = history->count();
+                sliders.first()->setSliderDown(true);
+                sliders.first()->setValue(20);
+                sliders.first()->setValue(-20);
+                sliders.first()->setSliderDown(false);
+                check(history->count() == count, "drag returning to start creates no command");
+                viewer.SlotSelectItem(second);
+                check(history->count() == 0 && !undoButton->isEnabled() && !redoButton->isEnabled(),
+                      "image switch clears history");
+
+                viewer.activateWindow();
+                sliders.first()->setFocus();
+                app.processEvents();
+                QTest::keyClick(sliders.first(), Qt::Key_Right);
+                const int steppedValue = sliders.first()->value();
+                QTest::keyClick(sliders.first(), Qt::Key_Z, Qt::ControlModifier);
+                check(steppedValue != 0 && sliders.first()->value() == 0,
+                      "Ctrl+Z works while slider has focus");
+                QTest::keyClick(sliders.first(), Qt::Key_Y, Qt::ControlModifier);
+                check(sliders.first()->value() == steppedValue,
+                      "Ctrl+Y restores edit while slider has focus");
+                QTest::keyClick(sliders.first(), Qt::Key_Z, Qt::ControlModifier);
+                QTest::keyClick(sliders.first(), Qt::Key_Z, Qt::ControlModifier | Qt::ShiftModifier);
+                check(sliders.first()->value() == steppedValue, "Ctrl+Shift+Z also redoes edit");
+                // Use an asymmetric image to verify rotation and mirror history.
+                QImage geometry(80, 60, QImage::Format_RGB32);
+                for (int y = 0; y < geometry.height(); ++y)
+                    for (int x = 0; x < geometry.width(); ++x)
+                        geometry.setPixelColor(x, y, QColor(x * 3, y * 4, (x + y) % 256));
+                const QString geometryPath = temporary.filePath("history-geometry.png");
+                check(geometry.save(geometryPath), "create asymmetric history fixture");
+                viewer.SlotSelectItem(geometryPath);
+                for (const char *slot : {"SlotRotateLeft", "SlotRotateRight", "SlotFlipH", "SlotFlipV"}) {
+                    const QImage before = preview();
+                    invoke(slot);
+                    const QImage after = preview();
+                    check(after != before, "geometry edit changes preview");
+                    invoke("SlotUndo");
+                    check(preview() == before, "geometry undo restores preview");
+                    invoke("SlotRedo");
+                    check(preview() == after, "geometry redo restores preview");
+                }
+                viewer.Clear();
+                check(history->count() == 0, "clear removes history");
+                viewer.SlotSelectItem(first);
+                sliders.first()->setValue(30);
+                viewer.SlotSelectItem(temporary.filePath("history-missing.png"));
+                check(history->count() == 0 && !history->canUndo(), "failed image load clears history");
+            }
+        }
+        viewer.hide();
+    }
+
+
+    {
+        QImage image(12, 8, QImage::Format_RGB32); image.fill(Qt::red);
+        const QString path = temporary.filePath("modified-state.png");
+        check(image.save(path), "create modification fixture");
+        PhotoEditDocument doc;
+        check(!doc.isModified() && doc.load(path) && !doc.isModified(), "empty and loaded document are unmodified");
+        const auto baseline = doc.state();
+        for (int edit = 0; edit < 7; ++edit) {
+            auto state = baseline;
+            if (edit == 0) state.parameters.brightness = 10;
+            if (edit == 1) state.parameters.contrast = 10;
+            if (edit == 2) state.parameters.saturation = 10;
+            if (edit == 3) state.parameters.filter = ImageProcessor::FilterInvert;
+            if (edit == 4) state.rotation = 90;
+            if (edit == 5) state.flipHorizontal = true;
+            if (edit == 6) state.flipVertical = true;
+            doc.setState(state);
+            check(doc.isModified(), "each edit kind changes modification state");
+            doc.setState(baseline);
+            check(!doc.isModified(), "restoring baseline clears modification state");
+        }
+        auto state = baseline; state.rotation = 90; state.parameters.brightness = 30;
+        doc.setState(state); doc.setParameters({});
+        check(doc.isModified(), "resetting color retains geometry modification");
+        doc.clear(); check(!doc.isModified(), "clear resets modification state");
+        doc.load(path); state = baseline; state.rotation = 90; doc.setState(state);
+        check(doc.load(path) && !doc.isModified(), "reloading resets modification baseline");
+        doc.setState(state); doc.load(temporary.filePath("missing-dirty.png"));
+        check(!doc.isModified(), "failed load clears modification baseline");
+        PicShow viewer; viewer.SlotSelectItem(path);
+        const auto sliders = viewer.findChildren<QSlider*>();
+        auto *history = viewer.findChild<QUndoStack*>("photoUndoStack");
+        check(!viewer.isModified(), "viewer initially clean");
+        if (!sliders.isEmpty() && history) {
+            sliders.first()->setValue(20);
+            check(viewer.isModified(), "viewer reports parameter edit");
+            history->undo(); check(!viewer.isModified() && history->count() != 0,
+                                   "undo baseline clean despite nonempty history");
+            history->redo(); check(viewer.isModified(), "redo marks viewer modified");
+            QMetaObject::invokeMethod(&viewer, "SlotResetAlgorithms", Qt::DirectConnection);
+            check(!viewer.isModified() && history->count() > 1, "reset baseline clean despite history index");
+            history->undo(); check(viewer.isModified(), "undo reset restores modified state");
+            history->undo(); sliders.first()->setValue(-10);
+            check(viewer.isModified() && !history->canRedo(), "branch edit updates modified state");
+            viewer.SlotSelectItem(path); check(!viewer.isModified(), "switching resets viewer modification");
+        }
+    }
+
+    {
+        QImage source(120, 80, QImage::Format_ARGB32);
+        for (int y = 0; y < source.height(); ++y)
+            for (int x = 0; x < source.width(); ++x)
+                source.setPixel(x, y, qRgba(x * 2, y * 3, (x + y) % 256, 80 + x));
+        const QString path = temporary.filePath("crop-source.png");
+        check(source.save(path), "create crop source fixture");
+        PhotoEditDocument document;
+        document.load(path);
+        bool mappingCorrect = true;
+        for (int angle : {0, 90, 180, 270}) {
+            for (bool horizontal : {false, true}) for (bool vertical : {false, true}) {
+                for (const QRect &prior : {QRect(), QRect(10, 12, 90, 60)}) {
+                    PhotoEditDocument::EditState state;
+                    state.crop = prior; state.rotation = angle;
+                    state.flipHorizontal = horizontal; state.flipVertical = vertical;
+                    document.setState(state);
+                    const QImage oriented = document.Render();
+                    const QRect selected(4, 6, 30, 20);
+                    const QImage expected = oriented.copy(selected);
+                    state.crop = document.sourceCropFromOrientedRect(selected);
+                    document.setState(state);
+                    mappingCorrect &= document.Render() == expected
+                        && document.outputSize() == expected.size() && document.isModified();
+                }
+            }
+        }
+        check(mappingCorrect, "crop pixels correct for all rotations mirrors and repeated crops");
+        document.load(path);
+        auto state = document.state(); state.crop = source.rect(); document.setState(state);
+        check(!document.isModified() && document.state().crop.isEmpty(), "full image crop is canonical unmodified state");
+        state.crop = QRect(5, 6, 40, 30); state.parameters.brightness = 15;
+        document.setState(state);
+        check(document.Render() == ImageProcessor::Apply(source.copy(state.crop), state.parameters),
+              "crop precedes color operations and preserves alpha");
+        const auto bytesBefore = readFile(path);
+        CropCanvas canvas(source); canvas.resize(640, 480); canvas.show(); app.processEvents();
+        const QRect desired(20, 16, 60, 40);
+        const auto sendMouse = [&](QEvent::Type type, const QPointF &pos, Qt::MouseButton button, Qt::MouseButtons held) {
+            QMouseEvent event(type, pos, canvas.mapToGlobal(pos.toPoint()), button, held, Qt::NoModifier);
+            QApplication::sendEvent(&canvas, &event);
+        };
+        const auto point = [&](const QPointF &imagePoint) {
+            const auto display = canvas.imageRect();
+            return QPointF(display.x() + imagePoint.x() * display.width() / source.width(),
+                           display.y() + imagePoint.y() * display.height() / source.height());
+        };
+        bool handleChecks = true;
+        const QVector<QPointF> handles = {QPointF(20,16), QPointF(50,16), QPointF(80,16),
+            QPointF(80,36), QPointF(80,56), QPointF(50,56), QPointF(20,56), QPointF(20,36)};
+        for (const auto &handle : handles) {
+            canvas.setSelection(desired);
+            const QPointF start = point(handle), finish = point(handle + QPointF(3, 3));
+            sendMouse(QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
+            sendMouse(QEvent::MouseMove, finish, Qt::NoButton, Qt::LeftButton);
+            sendMouse(QEvent::MouseButtonRelease, finish, Qt::LeftButton, Qt::NoButton);
+            handleChecks &= canvas.selection() != desired && source.rect().contains(canvas.selection())
+                && !canvas.selection().isEmpty();
+        }
+        check(handleChecks, "all eight crop handles resize valid image-space selection");
+        bool ratiosCorrect = true;
+        for (const QSize ratio : {QSize(1,1), QSize(4,3), QSize(3,2), QSize(16,9)}) {
+            canvas.setAspectRatio(ratio);
+            auto rect = canvas.selection();
+            ratiosCorrect &= rect.width() * ratio.height() == rect.height() * ratio.width();
+            const auto start = point(QPointF(rect.x()+rect.width(), rect.y()+rect.height()));
+            sendMouse(QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
+            sendMouse(QEvent::MouseMove, point(QPointF(400,400)), Qt::NoButton, Qt::LeftButton);
+            sendMouse(QEvent::MouseButtonRelease, point(QPointF(400,400)), Qt::LeftButton, Qt::NoButton);
+            rect = canvas.selection();
+            ratiosCorrect &= !rect.isEmpty() && source.rect().contains(rect)
+                && rect.width() * ratio.height() == rect.height() * ratio.width();
+        }
+        check(ratiosCorrect, "fixed crop ratios stay valid at image boundary");
+
+        canvas.setAspectRatio(QSize(4001,3001));
+        canvas.setSelection(desired);
+        const auto coprimeBefore = canvas.selection();
+        const auto coprimeCorner = point(QPointF(coprimeBefore.x()+coprimeBefore.width(),
+                                                coprimeBefore.y()+coprimeBefore.height()));
+        sendMouse(QEvent::MouseButtonPress, coprimeCorner, Qt::LeftButton, Qt::LeftButton);
+        sendMouse(QEvent::MouseMove, point(QPointF(coprimeBefore.x()+30, coprimeBefore.y()+23)),
+                  Qt::NoButton, Qt::LeftButton);
+        sendMouse(QEvent::MouseButtonRelease, point(QPointF(coprimeBefore.x()+30, coprimeBefore.y()+23)),
+                  Qt::LeftButton, Qt::NoButton);
+        const auto coprimeAfter = canvas.selection();
+        check(!coprimeAfter.isEmpty() && coprimeAfter.width() < coprimeBefore.width()
+              && qAbs(coprimeAfter.height() - coprimeAfter.width() * 3001.0/4001) <= 1.0,
+              "coprime original aspect allows smaller crops with pixel rounding");
+        canvas.setAspectRatio({});
+        canvas.setSelection(desired);
+        const auto center = point(QRectF(desired).center());
+        sendMouse(QEvent::MouseButtonPress, center, Qt::LeftButton, Qt::LeftButton);
+        sendMouse(QEvent::MouseMove, point(QPointF(300,300)), Qt::NoButton, Qt::LeftButton);
+        sendMouse(QEvent::MouseButtonRelease, point(QPointF(300,300)), Qt::LeftButton, Qt::NoButton);
+        check(canvas.selection().size() == desired.size() && source.rect().contains(canvas.selection()),
+              "moving crop clamps to image boundary without resizing");
+        canvas.setSelection(desired);
+        const QRect beforeZoom = canvas.selection();
+        QWheelEvent wheel(QPointF(260,200), canvas.mapToGlobal(QPoint(260,200)),
+                          QPoint(), QPoint(0,120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(&canvas, &wheel);
+        sendMouse(QEvent::MouseButtonPress, QPointF(200,200), Qt::RightButton, Qt::RightButton);
+        sendMouse(QEvent::MouseMove, QPointF(230,220), Qt::NoButton, Qt::RightButton);
+        sendMouse(QEvent::MouseButtonRelease, QPointF(230,220), Qt::RightButton, Qt::NoButton);
+        check(canvas.selection() == beforeZoom, "zoom and pan leave crop image coordinates unchanged");
+        canvas.resize(900, 600); app.processEvents();
+        const QPointF resizedCenter = point(QRectF(desired).center());
+        sendMouse(QEvent::MouseButtonPress, resizedCenter, Qt::LeftButton, Qt::LeftButton);
+        sendMouse(QEvent::MouseMove, point(QRectF(desired).center()+QPointF(2,3)), Qt::NoButton, Qt::LeftButton);
+        sendMouse(QEvent::MouseButtonRelease, point(QRectF(desired).center()+QPointF(2,3)), Qt::LeftButton, Qt::NoButton);
+        check(canvas.selection() == desired.translated(2,3), "crop mapping survives resize zoom and pan");
+        canvas.hide();
+
+        PicShow viewer; viewer.resize(1100,750); viewer.show(); viewer.SlotSelectItem(path); app.processEvents();
+        auto *history = viewer.findChild<QUndoStack*>("photoUndoStack");
+        const auto cropWith = [&](bool accept, const QRect &selection) {
+            QTimer::singleShot(30, &viewer, [&, accept, selection]() {
+                auto *dialog = qobject_cast<CropDialog*>(QApplication::activeModalWidget());
+                check(dialog != nullptr, "crop dialog opens");
+                if (!dialog) return;
+
+                dialog->findChild<CropCanvas*>()->setSelection(selection);
+                if (accept) {
+                    check(dialog->grab().save(outputDir + "/crop-dialog.png"), "crop dialog screenshot");
+                }
+                if (accept) QTest::keyClick(dialog, Qt::Key_Return);
+                else QTest::keyClick(dialog, Qt::Key_Escape);
+            });
+            QMetaObject::invokeMethod(&viewer, "SlotCrop", Qt::DirectConnection);
+        };
+        cropWith(false, desired);
+        check(history && history->count() == 0 && !viewer.isModified(), "cancel crop leaves document history and modification unchanged");
+
+        cropWith(true, desired);
+        auto *cropPreview = viewer.findChild<QLabel*>("label");
+        const auto croppedPreview = cropPreview->grab().toImage();
+        check(history && history->count() == 1 && viewer.isModified(), "confirm crop creates one modified history step");
+        if (history) {
+
+            history->undo(); check(!viewer.isModified() && cropPreview->grab().toImage() != croppedPreview,
+                                  "undo crop restores unmodified baseline");
+            history->redo(); check(viewer.isModified() && cropPreview->grab().toImage() == croppedPreview,
+                                  "redo restores crop modification and rendered pixels");
+            QMetaObject::invokeMethod(&viewer, "SlotResetAlgorithms", Qt::DirectConnection);
+            check(viewer.isModified(), "reset colors does not clear crop modification");
+        }
+        check(readFile(path) == bytesBefore, "crop and history preserve original file");
+        viewer.hide();
     }
     QList<PhotoEntry> photos;
     for (int i = 0; i < 5; ++i) {

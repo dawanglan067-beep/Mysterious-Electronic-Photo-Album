@@ -105,7 +105,7 @@ QString MusicController::FindDefaultMusicFile()
     }
 
     // 扫描匹配可用合法音频
-    QStringList filters = { "*.wav", "*.mp3", "*.flac", "*.m4a", "*.aac", "*.ogg", "*.mp4" };
+    QStringList filters = { "*.wav", "*.mp3", "*.flac", "*.m4a", "*.aac", "*.ogg", "*.wma" };
     QFileInfoList files = musicDir.entryInfoList(filters, QDir::Files, QDir::Name);
     for (const QFileInfo &fi : files)
     {
@@ -299,28 +299,6 @@ bool MusicController::NativeMciIsPlaying() const
     return _is_native_playing;
 }
 
-qint64 MusicController::NativeMciGetPosition() const
-{
-    wchar_t posBuf[128] = {0};
-    std::wstring cmd = L"status " + std::wstring(kMciAlias) + L" position";
-    if (mciSendStringW(cmd.c_str(), posBuf, 128, NULL) == 0)
-    {
-        return QString::fromWCharArray(posBuf).toLongLong();
-    }
-    return 0;
-}
-
-qint64 MusicController::NativeMciGetDuration() const
-{
-    wchar_t lenBuf[128] = {0};
-    std::wstring cmd = L"status " + std::wstring(kMciAlias) + L" length";
-    if (mciSendStringW(cmd.c_str(), lenBuf, 128, NULL) == 0)
-    {
-        return QString::fromWCharArray(lenBuf).toLongLong();
-    }
-    return 0;
-}
-
 bool MusicController::IsMusicPlaying() const
 {
     return NativeMciIsPlaying() || (_player && _player->playbackState() == QMediaPlayer::PlayingState);
@@ -369,7 +347,7 @@ void MusicController::SlotSelectMusicFile()
     file_dialog.setWindowTitle(tr("选择导入的音频文件"));
     file_dialog.setDirectory(FindDefaultMusicDir());
     file_dialog.setViewMode(QFileDialog::Detail);
-    file_dialog.setNameFilter(tr("音频文件 (*.wav *.mp3 *.flac *.m4a *.aac *.ogg *.mp4);;纯音频 (*.wav *.mp3 *.flac);;所有文件 (*.*)"));
+    file_dialog.setNameFilter(tr("音频文件 (*.wav *.mp3 *.flac *.m4a *.aac *.ogg *.wma);;纯音频 (*.wav *.mp3 *.flac);;所有文件 (*.*)"));
     QStringList fileNames;
     if (file_dialog.exec())
     {
@@ -432,7 +410,13 @@ void MusicController::SlotStartMusic()
     _last_music_error.clear();
 
     // 核心解决点：通过 Windows 原生多媒体引擎直接将音频流推入物理声卡，绕过 Qt 6.8 FFmpeg 插件的空通道重采样 Bug
-    bool mciOk = NativeMciPlay(_music_path);
+    // MCI does not provide reliable FLAC/AAC/OGG support. Send these formats
+    // straight to QMediaPlayer instead of logging an expected MCI failure.
+    const QString suffix = QFileInfo(_music_path).suffix().toLower();
+    const bool mciCompatible = suffix == QStringLiteral("wav") ||
+                               suffix == QStringLiteral("mp3") ||
+                               suffix == QStringLiteral("wma");
+    const bool mciOk = mciCompatible && NativeMciPlay(_music_path);
     if (!mciOk)
     {
         qDebug() << "[MusicPlayer] Using QMediaPlayer fallback for" << _music_path;

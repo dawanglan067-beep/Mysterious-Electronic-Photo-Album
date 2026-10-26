@@ -1,5 +1,6 @@
 #include "picshow.h"
 #include "ui_picshow.h"
+#include "cropdialog.h"
 #include <QGraphicsOpacityEffect>
 #include <QPropertyAnimation>
 #include <QPainter>
@@ -19,13 +20,28 @@
 #include <QUrl>
 #include <QTransform>
 #include <QSlider>
+#include <QSignalBlocker>
+#include <QUndoCommand>
+#include <QAction>
 #include <QComboBox>
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QtMath>
 #include <algorithm>
 
-// ======================== HistogramWidget 实现 ========================
+// 历史只保存编辑参数，不复制原图或预览像素。
+class PhotoEditCommand : public QUndoCommand
+{
+public:
+    PhotoEditCommand(PicShow *viewer, const PhotoEditDocument::EditState &before,
+                     const PhotoEditDocument::EditState &after, const QString &text)
+        : QUndoCommand(text), _viewer(viewer), _before(before), _after(after) {}
+    void undo() override { _viewer->ApplyEditState(_before); }
+    void redo() override { _viewer->ApplyEditState(_after); }
+private:
+    PicShow *_viewer;
+    PhotoEditDocument::EditState _before, _after;
+};
 
 PicShow::PicShow(QWidget *parent)
     : QDialog(parent)
@@ -35,17 +51,10 @@ PicShow::PicShow(QWidget *parent)
     , _is_actual_pixel(false)
     , _pan_offset(0.0, 0.0)
     , _is_dragging(false)
-    , _rotate_angle(0)
-    , _flip_horizontal(false)
-    , _flip_vertical(false)
     , _toolbar_wid(nullptr)
     , _btn_zoom_reset(nullptr)
     , _info_panel(nullptr)
     , _histogram_wid(nullptr)
-    , _brightness(0)
-    , _contrast(0)
-    , _saturation(0)
-    , _filter_type(ImageProcessor::FilterNone)
     , _slider_bright(nullptr)
     , _slider_contrast(nullptr)
     , _slider_sat(nullptr)
@@ -55,6 +64,8 @@ PicShow::PicShow(QWidget *parent)
     , _combo_filter(nullptr)
 {
     ui->setupUi(this);
+    _undo_stack = new QUndoStack(this);
+    _undo_stack->setObjectName("photoUndoStack");
 
     // 核心优化：为 label 安装事件过滤器，拦截其 Paint / 滚轮 / 鼠标拖拽事件进行自主交互绘制
     // 彻底解决 QLabel::setPixmap 污染 sizeHint 导致窗口无法缩小以及布局挤压裁切图片的问题
@@ -248,7 +259,12 @@ void PicShow::InitStudioUI()
         sliderGrid->addWidget(slider, row, 1);
         sliderGrid->addWidget(valLbl, row, 2);
         connect(slider, &QSlider::valueChanged, this, &PicShow::SlotAdjustParamsChanged);
-        connect(slider, &QSlider::sliderReleased, this, &PicShow::SlotAdjustParamsChanged);
+        connect(slider, &QSlider::sliderPressed, this, [this]() {
+            FinishParameterDrag();
+            _drag_start_state = _document.state();
+            _parameter_dragging = true;
+        });
+        connect(slider, &QSlider::sliderReleased, this, &PicShow::FinishParameterDrag);
     };
 
     addSliderRow(0, tr("亮度:"), _slider_bright, _lbl_bright_val);
@@ -276,6 +292,36 @@ void PicShow::InitStudioUI()
     algoBtnRow->addWidget(btnResetAlgo);
     algoBtnRow->addWidget(btnSaveImg);
     infoLayout->addLayout(algoBtnRow);
+    auto *cropButton = new QPushButton(tr("裁剪…"), _info_panel);
+    cropButton->setObjectName("photoCropButton");
+    infoLayout->addWidget(cropButton);
+    connect(cropButton, &QPushButton::clicked, this, &PicShow::SlotCrop);
+    QHBoxLayout *historyRow = new QHBoxLayout();
+    auto *undoButton = new QPushButton(tr("撤销"), _info_panel);
+    auto *redoButton = new QPushButton(tr("重做"), _info_panel);
+    undoButton->setObjectName("photoUndoButton");
+    redoButton->setObjectName("photoRedoButton");
+    undoButton->setEnabled(false);
+    redoButton->setEnabled(false);
+    historyRow->addWidget(undoButton);
+    historyRow->addWidget(redoButton);
+    infoLayout->addLayout(historyRow);
+    connect(undoButton, &QPushButton::clicked, this, &PicShow::SlotUndo);
+    connect(redoButton, &QPushButton::clicked, this, &PicShow::SlotRedo);
+    connect(_undo_stack, &QUndoStack::canUndoChanged, undoButton, &QPushButton::setEnabled);
+    connect(_undo_stack, &QUndoStack::canRedoChanged, redoButton, &QPushButton::setEnabled);
+    auto *undoAction = new QAction(tr("撤销"), this);
+    undoAction->setShortcut(QKeySequence::Undo);
+    undoAction->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    addAction(undoAction);
+    connect(undoAction, &QAction::triggered, this, &PicShow::SlotUndo);
+    auto *redoAction = new QAction(tr("重做"), this);
+    redoAction->setShortcuts({QKeySequence(Qt::CTRL | Qt::Key_Y),
+                              QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Z)});
+    redoAction->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    addAction(redoAction);
+    connect(redoAction, &QAction::triggered, this, &PicShow::SlotRedo);
+
 
     connect(btnResetAlgo, &QPushButton::clicked, this, &PicShow::SlotResetAlgorithms);
     connect(btnSaveImg, &QPushButton::clicked, this, &PicShow::SlotSaveProcessedImage);
@@ -341,7 +387,7 @@ void PicShow::ResetViewFit()
 
 void PicShow::RebuildTransformedPixmap()
 {
-    if (_src_image.isNull())
+    if (_document.sourceImage().isNull())
     {
         Original_map = QPixmap();
         _histogram_wid->ClearHistogram();
@@ -350,31 +396,10 @@ void PicShow::RebuildTransformedPixmap()
         return;
     }
 
-    QImage transformed = _src_image;
-    if (_flip_horizontal || _flip_vertical)
-    {
-        transformed = transformed.mirrored(_flip_horizontal, _flip_vertical);
-    }
-    if (_rotate_angle != 0)
-    {
-        QTransform trans;
-        trans.rotate(_rotate_angle);
-        transformed = transformed.transformed(trans, Qt::SmoothTransformation);
-    }
-
-    // 应用数字图像算法管线（色彩空间调节 + 卷积/点运算算子）
-    if (_brightness != 0 || _contrast != 0 || _saturation != 0 || _filter_type != ImageProcessor::FilterNone)
-    {
-        // 当鼠标正在按住拖拽滑块且原图分辨率较高（> 1600px）时，使用降采样预览保证 60fps 丝滑跟手，松开滑块后立即渲染全分辨率原图
-        const bool isSliderDragging = (_slider_bright && _slider_bright->isSliderDown()) ||
-                                      (_slider_contrast && _slider_contrast->isSliderDown()) ||
-                                      (_slider_sat && _slider_sat->isSliderDown());
-        if (isSliderDragging && (transformed.width() > 1600 || transformed.height() > 1600))
-        {
-            transformed = transformed.scaled(1600, 1600, Qt::KeepAspectRatio, Qt::FastTransformation);
-        }
-        transformed = ApplyImageAlgorithms(transformed);
-    }
+    const bool dragging = (_slider_bright && _slider_bright->isSliderDown()) ||
+                          (_slider_contrast && _slider_contrast->isSliderDown()) ||
+                          (_slider_sat && _slider_sat->isSliderDown());
+    const QImage transformed = _document.Render(dragging ? 1600 : 0);
 
     Original_map = QPixmap::fromImage(transformed);
     _histogram_wid->UpdateHistogram(transformed);
@@ -384,7 +409,7 @@ void PicShow::RebuildTransformedPixmap()
 
 void PicShow::UpdateImageMetadata()
 {
-    if (_selected_path.isEmpty() || _src_image.isNull())
+    if (_document.sourcepath().isEmpty() || _document.sourceImage().isNull())
     {
         _lbl_meta_name->setText("-");
         _lbl_meta_dim->setText("-");
@@ -396,11 +421,11 @@ void PicShow::UpdateImageMetadata()
         return;
     }
 
-    QFileInfo fi(_selected_path);
+    QFileInfo fi(_document.sourcepath());
     _lbl_meta_name->setText(fi.fileName());
 
-    const int w = (_rotate_angle % 180 != 0) ? _src_image.height() : _src_image.width();
-    const int h = (_rotate_angle % 180 != 0) ? _src_image.width() : _src_image.height();
+    const int w = _document.outputSize().width();
+    const int h = _document.outputSize().height();
     const double mp = (w * h) / 1000000.0;
     _lbl_meta_dim->setText(QString("%1 × %2 px (%3 MP)")
                                .arg(w)
@@ -416,11 +441,11 @@ void PicShow::UpdateImageMetadata()
     _lbl_meta_size->setText(QString("%1 (%2)").arg(sizeStr, fi.suffix().toUpper()));
 
     _lbl_meta_depth->setText(QString("%1-bit (%2)")
-                                 .arg(_src_image.depth())
-                                 .arg(_src_image.hasAlphaChannel() ? "RGBA" : "RGB"));
+                                 .arg(_document.sourceImage().depth())
+                                 .arg(_document.sourceImage().hasAlphaChannel() ? "RGBA" : "RGB"));
 
     // 计算当前处理后图像的 RGB 通道平均亮度
-    QImage sampleSrc = !Original_map.isNull() ? Original_map.toImage() : _src_image;
+    QImage sampleSrc = !Original_map.isNull() ? Original_map.toImage() : _document.sourceImage();
     QImage small = sampleSrc.scaled(64, 64, Qt::IgnoreAspectRatio, Qt::FastTransformation)
                        .convertToFormat(QImage::Format_RGB32);
     qint64 sumR = 0, sumG = 0, sumB = 0;
@@ -459,23 +484,12 @@ void PicShow::ReloadPic()
 // 清空当前展示的图片数据与路径，并刷新重绘为空白
 void PicShow::Clear()
 {
-    _selected_path.clear();
-    _src_image = QImage();
+    _parameter_dragging = false;
+    _undo_stack->clear();
+    _document.clear();
     Original_map = QPixmap();
-    _rotate_angle = 0;
-    _flip_horizontal = false;
-    _flip_vertical = false;
-    if (_slider_bright) { _slider_bright->blockSignals(true); _slider_bright->setValue(0); _slider_bright->blockSignals(false); }
-    if (_slider_contrast) { _slider_contrast->blockSignals(true); _slider_contrast->setValue(0); _slider_contrast->blockSignals(false); }
-    if (_slider_sat) { _slider_sat->blockSignals(true); _slider_sat->setValue(0); _slider_sat->blockSignals(false); }
-    if (_combo_filter) { _combo_filter->blockSignals(true); _combo_filter->setCurrentIndex(0); _combo_filter->blockSignals(false); }
-    _brightness = 0;
-    _contrast = 0;
-    _saturation = 0;
-    _filter_type = ImageProcessor::FilterNone;
-    if (_lbl_bright_val) _lbl_bright_val->setText("0");
-    if (_lbl_contrast_val) _lbl_contrast_val->setText("0");
-    if (_lbl_sat_val) _lbl_sat_val->setText("0");
+    _document.setParameters({});
+    SyncControlsFromDocument();
     ResetViewFit();
     if (_histogram_wid)
     {
@@ -598,8 +612,8 @@ bool PicShow::eventFilter(QObject *watched, QEvent *event)
                 return true;
             }
 
-            const int fullW = (_rotate_angle % 180 != 0) ? _src_image.height() : _src_image.width();
-            const int fullH = (_rotate_angle % 180 != 0) ? _src_image.width() : _src_image.height();
+            const int fullW = _document.outputSize().width();
+            const int fullH = _document.outputSize().height();
 
             // 基于未损耗的高清原图尺寸计算等比例适应 label 尺寸的基准绘制大小
             QSize base_size = QSize(fullW, fullH).scaled(ui->label->size(), Qt::KeepAspectRatio);
@@ -626,9 +640,10 @@ bool PicShow::eventFilter(QObject *watched, QEvent *event)
                                   .arg(_is_actual_pixel ? "1:1 原图" : QString("%1%").arg(qRound(_zoom_factor * 100)))
                                   .arg(fullW)
                                   .arg(fullH);
-            if (_rotate_angle != 0)
+            if (_document.isModified()) hudText += tr(" | 已修改 ");
+            if (_document.state().rotation != 0)
             {
-                hudText += QString(" | 旋转 %1° ").arg(_rotate_angle);
+                hudText += QString(" | 旋转 %1° ").arg(_document.state().rotation);
             }
             QFont hudFont = painter.font();
             hudFont.setPointSize(9);
@@ -710,30 +725,42 @@ void PicShow::SlotZoomActual()
 
 void PicShow::SlotRotateLeft()
 {
-    if (_src_image.isNull()) return;
-    _rotate_angle = (_rotate_angle + 270) % 360;
-    RebuildTransformedPixmap();
+    if (_document.sourceImage().isNull()) return;
+    FinishParameterDrag();
+    const auto before = _document.state();
+    auto after = before;
+    after.rotation = (after.rotation + 270) % 360;
+    PushEdit(before, after, tr("左旋"));
 }
 
 void PicShow::SlotRotateRight()
 {
-    if (_src_image.isNull()) return;
-    _rotate_angle = (_rotate_angle + 90) % 360;
-    RebuildTransformedPixmap();
+    if (_document.sourceImage().isNull()) return;
+    FinishParameterDrag();
+    const auto before = _document.state();
+    auto after = before;
+    after.rotation = (after.rotation + 90) % 360;
+    PushEdit(before, after, tr("右旋"));
 }
 
 void PicShow::SlotFlipH()
 {
-    if (_src_image.isNull()) return;
-    _flip_horizontal = !_flip_horizontal;
-    RebuildTransformedPixmap();
+    if (_document.sourceImage().isNull()) return;
+    FinishParameterDrag();
+    const auto before = _document.state();
+    auto after = before;
+    after.flipHorizontal = !after.flipHorizontal;
+    PushEdit(before, after, tr("水平镜像"));
 }
 
 void PicShow::SlotFlipV()
 {
-    if (_src_image.isNull()) return;
-    _flip_vertical = !_flip_vertical;
-    RebuildTransformedPixmap();
+    if (_document.sourceImage().isNull()) return;
+    FinishParameterDrag();
+    const auto before = _document.state();
+    auto after = before;
+    after.flipVertical = !after.flipVertical;
+    PushEdit(before, after, tr("垂直镜像"));
 }
 
 void PicShow::SlotToggleInfoPanel()
@@ -747,8 +774,8 @@ void PicShow::SlotToggleInfoPanel()
 
 void PicShow::SlotOpenInExplorer()
 {
-    if (_selected_path.isEmpty()) return;
-    QFileInfo fi(_selected_path);
+    if (_document.sourcepath().isEmpty()) return;
+    QFileInfo fi(_document.sourcepath());
     if (!fi.exists()) return;
 #ifdef Q_OS_WIN
     QProcess::startDetached("explorer.exe", {"/select,", QDir::toNativeSeparators(fi.absoluteFilePath())});
@@ -759,26 +786,35 @@ void PicShow::SlotOpenInExplorer()
 
 void PicShow::SlotAdjustParamsChanged()
 {
+    if (_document.sourceImage().isNull()) { SyncControlsFromDocument(); return; }
+    const auto before = _document.state();
+    ImageProcessor::Parameters parameters = _document.parameters();
     if (_slider_bright)
     {
-        _brightness = _slider_bright->value();
-        _lbl_bright_val->setText(QString::number(_brightness));
+        parameters.brightness = _slider_bright->value();
     }
     if (_slider_contrast)
     {
-        _contrast = _slider_contrast->value();
-        _lbl_contrast_val->setText(QString::number(_contrast));
+        parameters.contrast = _slider_contrast->value();
     }
     if (_slider_sat)
     {
-        _saturation = _slider_sat->value();
-        _lbl_sat_val->setText(QString::number(_saturation));
+        parameters.saturation = _slider_sat->value();
     }
     if (_combo_filter)
     {
-        _filter_type = static_cast<ImageProcessor::FilterType>(_combo_filter->currentData().toInt());
+        parameters.filter = static_cast<ImageProcessor::FilterType>
+            (_combo_filter->currentData().toInt());
     }
-    if (!_src_image.isNull())
+    if (!_parameter_dragging) {
+        auto after = before;
+        after.parameters = parameters;
+        PushEdit(before, after, tr("调整颜色/滤镜"));
+        return;
+    }
+    _document.setParameters(parameters);
+    SyncControlsFromDocument();
+    if (!_document.sourceImage().isNull())
     {
         RebuildTransformedPixmap();
     }
@@ -786,18 +822,12 @@ void PicShow::SlotAdjustParamsChanged()
 
 void PicShow::SlotResetAlgorithms()
 {
-    if (_slider_bright) { _slider_bright->blockSignals(true); _slider_bright->setValue(0); _slider_bright->blockSignals(false); }
-    if (_slider_contrast) { _slider_contrast->blockSignals(true); _slider_contrast->setValue(0); _slider_contrast->blockSignals(false); }
-    if (_slider_sat) { _slider_sat->blockSignals(true); _slider_sat->setValue(0); _slider_sat->blockSignals(false); }
-    if (_combo_filter) { _combo_filter->blockSignals(true); _combo_filter->setCurrentIndex(0); _combo_filter->blockSignals(false); }
-    _brightness = 0;
-    _contrast = 0;
-    _saturation = 0;
-    _filter_type = ImageProcessor::FilterNone;
-    if (_lbl_bright_val) _lbl_bright_val->setText("0");
-    if (_lbl_contrast_val) _lbl_contrast_val->setText("0");
-    if (_lbl_sat_val) _lbl_sat_val->setText("0");
-    RebuildTransformedPixmap();
+    if (_document.sourceImage().isNull()) return;
+    FinishParameterDrag();
+    const auto before = _document.state();
+    auto after = before;
+    after.parameters = {};
+    PushEdit(before, after, tr("还原参数"));
 }
 
 void PicShow::SlotSaveProcessedImage()
@@ -806,7 +836,7 @@ void PicShow::SlotSaveProcessedImage()
     {
         return;
     }
-    QFileInfo fi(_selected_path);
+    QFileInfo fi(_document.sourcepath());
     QString defaultPath = fi.dir().absoluteFilePath(fi.completeBaseName() + "_edited." + (fi.suffix().isEmpty() ? "png" : fi.suffix()));
     QString savePath = QFileDialog::getSaveFileName(
         this,
@@ -867,47 +897,106 @@ void PicShow::ShowPreNextBtns(bool b_show)
 // 槽函数：选中/双击树节点时的图片加载逻辑
 void PicShow::SlotSelectItem(const QString &path)
 {
-    _selected_path = path;
     if (path.isEmpty())
     {
         Clear();
         return;
     }
+    _parameter_dragging = false;
+    _undo_stack->clear();
     // 读取原始图片文件并重置视图与滤镜状态
-    _src_image.load(path);
-    _rotate_angle = 0;
-    _flip_horizontal = false;
-    _flip_vertical = false;
-    if (_slider_bright) { _slider_bright->blockSignals(true); _slider_bright->setValue(0); _slider_bright->blockSignals(false); }
-    if (_slider_contrast) { _slider_contrast->blockSignals(true); _slider_contrast->setValue(0); _slider_contrast->blockSignals(false); }
-    if (_slider_sat) { _slider_sat->blockSignals(true); _slider_sat->setValue(0); _slider_sat->blockSignals(false); }
-    if (_combo_filter) { _combo_filter->blockSignals(true); _combo_filter->setCurrentIndex(0); _combo_filter->blockSignals(false); }
-    _brightness = 0;
-    _contrast = 0;
-    _saturation = 0;
-    _filter_type = ImageProcessor::FilterNone;
-    if (_lbl_bright_val) _lbl_bright_val->setText("0");
-    if (_lbl_contrast_val) _lbl_contrast_val->setText("0");
-    if (_lbl_sat_val) _lbl_sat_val->setText("0");
+    if (!_document.load(path))
+    {
+        Clear();
+        qWarning() << "[PhotoEditor] Cannot load image:" << path;
+        return;
+    }
+    _document.setParameters({});
+    SyncControlsFromDocument();
     ResetViewFit();
     RebuildTransformedPixmap();
 }
-
 // 槽函数：上一张/下一张切换时的图片更新逻辑
 void PicShow::SlotUpdatePic(const QString &path)
 {
     SlotSelectItem(path);
 }
 
-// 槽函数：供外部调用的清空逻辑
-void PicShow::SlotClear()
+
+void PicShow::SyncControlsFromDocument()
 {
-    Clear();
+    setProperty("photoModified", _document.isModified());
+    setWindowTitle(_document.isModified() ? tr("照片编辑 * 已修改") : tr("照片编辑"));
+    const auto parameters = _document.parameters();
+    if (_slider_bright) {
+        const QSignalBlocker blocker(_slider_bright);
+        _slider_bright->setValue(parameters.brightness);
+    }
+    if (_slider_contrast) {
+        const QSignalBlocker blocker(_slider_contrast);
+        _slider_contrast->setValue(parameters.contrast);
+    }
+    if (_slider_sat) {
+        const QSignalBlocker blocker(_slider_sat);
+        _slider_sat->setValue(parameters.saturation);
+    }
+    if (_combo_filter) {
+        const QSignalBlocker blocker(_combo_filter);
+        _combo_filter->setCurrentIndex(_combo_filter->findData(parameters.filter));
+    }
+    if (_lbl_bright_val) _lbl_bright_val->setText(QString::number(parameters.brightness));
+    if (_lbl_contrast_val) _lbl_contrast_val->setText(QString::number(parameters.contrast));
+    if (_lbl_sat_val) _lbl_sat_val->setText(QString::number(parameters.saturation));
 }
 
-
-
-QImage PicShow::ApplyImageAlgorithms(const QImage &src) const
+void PicShow::ApplyEditState(const PhotoEditDocument::EditState &state)
 {
-    return ImageProcessor::Apply(src, {_brightness, _contrast, _saturation, _filter_type});
+    _document.setState(state);
+    SyncControlsFromDocument();
+    RebuildTransformedPixmap();
+}
+
+void PicShow::PushEdit(const PhotoEditDocument::EditState &before,
+                       const PhotoEditDocument::EditState &after, const QString &text)
+{
+    if (!(before == after))
+        _undo_stack->push(new PhotoEditCommand(this, before, after, text));
+}
+
+void PicShow::FinishParameterDrag()
+{
+    if (!_parameter_dragging) return;
+    _parameter_dragging = false;
+    const auto after = _document.state();
+    PushEdit(_drag_start_state, after, tr("拖动调色滑块"));
+    // 松开后即使数值回到起点，也要恢复全分辨率预览。
+    RebuildTransformedPixmap();
+}
+
+void PicShow::SlotUndo()
+{
+    FinishParameterDrag();
+    _undo_stack->undo();
+}
+
+void PicShow::SlotRedo()
+{
+    FinishParameterDrag();
+    _undo_stack->redo();
+}
+
+void PicShow::SlotCrop()
+{
+    if (_document.sourceImage().isNull()) return;
+    FinishParameterDrag();
+    const auto before = _document.state();
+    QSize originalSize = _document.sourceImage().size();
+    if (before.rotation % 180 != 0) originalSize.transpose();
+    CropDialog dialog(_document.Render(), originalSize, this);
+    if (dialog.exec() != QDialog::Accepted) return;
+    const QRect sourceCrop = _document.sourceCropFromOrientedRect(dialog.selection());
+    if (sourceCrop.isEmpty()) return;
+    auto after = before;
+    after.crop = sourceCrop == _document.sourceImage().rect() ? QRect() : sourceCrop;
+    PushEdit(before, after, tr("裁剪"));
 }

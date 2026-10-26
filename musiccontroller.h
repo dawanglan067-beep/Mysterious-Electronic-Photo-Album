@@ -60,8 +60,6 @@ private:
     void NativeMciStop();
     void NativeMciSetVolume(int volume);
     bool NativeMciIsPlaying() const;
-    qint64 NativeMciGetPosition() const;
-    qint64 NativeMciGetDuration() const;
     void NativeMciClose();
 
     void EnsureMusicSourceLoaded();

@@ -4,9 +4,13 @@
 #include <QFile>
 #include <QDebug>
 #include <QIcon>
+#include <QByteArray>
 
 int main(int argc, char *argv[])
 {
+    // Use Windows Media Foundation for local audio. It handles the same FLAC
+    // files as Windows Media Player and avoids the FFmpeg SWR fallback path.
+    qputenv("QT_MEDIA_BACKEND", QByteArrayLiteral("windows"));
     QApplication a(argc, argv);
     QApplication::setWindowIcon(QIcon(QStringLiteral(":/icon/app/album.ico")));
 

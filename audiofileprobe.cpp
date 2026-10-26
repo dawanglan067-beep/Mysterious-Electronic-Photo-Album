@@ -27,6 +27,25 @@ QString AudioFileProbe::SniffAudioFileFormat(const QString &filePath, QString *o
     QFileInfo fi(filePath);
     QString ext = fi.suffix().toLower();
 
+    // Keep the accepted input set explicit. Unknown extensions may contain
+    // encrypted provider-specific data even when their file header is large.
+    static const QStringList supportedExtensions = {
+        QStringLiteral("wav"), QStringLiteral("mp3"), QStringLiteral("flac"),
+        QStringLiteral("m4a"), QStringLiteral("aac"), QStringLiteral("ogg"),
+        QStringLiteral("wma")
+    };
+    if (!supportedExtensions.contains(ext))
+    {
+        if (outDiagReason)
+        {
+            *outDiagReason = QCoreApplication::translate(
+                "ProTreeWidget",
+                "不支持的音频扩展名 .%1。请使用普通 WAV、MP3、FLAC、M4A、AAC、OGG 或 WMA 文件（不支持 QQ 加密格式）。")
+                .arg(ext.isEmpty() ? QStringLiteral("<无>") : ext);
+        }
+        return QString();
+    }
+
     // 1. 深度检测 MP4 容器 (包含 ftyp 标识)
     if (header.size() >= 8 && header.mid(4, 4) == "ftyp")
     {

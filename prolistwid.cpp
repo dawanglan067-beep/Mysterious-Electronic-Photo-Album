@@ -6,7 +6,7 @@
 #include "prelistitem.h"
 #include <QGuiApplication>
 ProListWid::ProListWid(QWidget *parent)
-    :_global(0),QListWidget(parent),last_index(17)
+    :_global(0),QListWidget(parent)
 {
     this->setViewMode(QListWidget::IconMode);
     this->setIconSize(QSize(PREICON_SIZE,PREICON_SIZE));
@@ -116,12 +116,10 @@ void ProListWid::SlotUpSelect(QTreeWidgetItem *tree_item)
     {
         int shiftCount = index - maxVisibleCount;
         this->move(_pos_origin.x() - shiftCount * itemStep, _pos_origin.y());
-        last_index = index;
     }
     else
     {
         this->move(_pos_origin);
-        last_index = maxVisibleCount;
     }
     this->setCurrentItem(iter.value());
 }

@@ -446,11 +446,6 @@ void ProTreeThread::CreateProTree(const QString &src_path, const QString &dist_p
     }
 }
 
-void ProTreeThread::SlotCanelProgress()
-{
-    this->_bstop.store(true);
-}
-
 // 响应取消操作的槽函数
 void ProTreeThread::SlotCanceled()
 {

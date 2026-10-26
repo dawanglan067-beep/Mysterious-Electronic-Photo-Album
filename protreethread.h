@@ -50,7 +50,6 @@ private:
     QSet<QString> _existing_pic_paths;              // 记录相册中已有的图片路径，防止重复导入产生同名重复节点
 
 public slots:
-    void SlotCanelProgress();
     void SlotCanceled();           // 响应外部取消操作的槽函数
 
 signals:

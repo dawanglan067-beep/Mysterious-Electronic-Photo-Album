@@ -4,6 +4,10 @@ Configure with `-DALBUM_BUILD_FEATURE_TESTS=ON`, build, then run
 `ctest --test-dir build-msvc --output-on-failure` in your Qt/MSVC environment.
 The option defaults to OFF for normal application builds.
 
+Editor history checks cover slider gesture grouping, keyboard shortcuts with slider
+focus, filter/reset undo, rotation/mirroring pixel restoration, redo branch removal,
+and history isolation on switching/clearing/failed loading.
+
 Module checks cover image processing defaults/inversion/transparency, duplicate
 group boundaries, audio format mismatch detection, settings round trips, music
 volume/policy persistence and the music settings dialog.
@@ -36,3 +40,9 @@ For manual acceptance, open an album and import a folder: images should be
 visible, double-clicking an image must not submit it as an album, and
 "选择此文件夹" must select the highlighted folder. With no selected item,
 "选择当前文件夹" must select the directory shown in the address bar.
+
+Modification-state checks compare edit snapshots to the load baseline independently
+of undo indexes. Crop checks cover source-space pixel mapping for rotations/mirrors,
+repeated crops, alpha preservation, handle dragging, aspect constraints, zoom/pan,
+and confirm/cancel history behavior. crop-dialog.png is retained when an explicit
+output directory is supplied. High DPI can be checked with QT_SCALE_FACTOR=2.

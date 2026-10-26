@@ -20,7 +20,6 @@ public:
     ProTreeItem*GetFirstPicChild();
 private:
     QString _path;
-    QString _name;
     QTreeWidgetItem* _root;
     QTreeWidgetItem*_pre_item;//上一张照片
     QTreeWidgetItem*_next_item;//下一张照片
