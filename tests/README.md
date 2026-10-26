@@ -46,3 +46,12 @@ of undo indexes. Crop checks cover source-space pixel mapping for rotations/mirr
 repeated crops, alpha preservation, handle dragging, aspect constraints, zoom/pan,
 and confirm/cancel history behavior. crop-dialog.png is retained when an explicit
 output directory is supplied. High DPI can be checked with QT_SCALE_FACTOR=2.
+
+Original comparison checks hold/release source pixels after color, geometry and crop
+edits; restore zoomed view; preserve history and modification state; and clear the
+comparison on source switch, failed load, clear, hide and window deactivation.
+
+Crop canvas uses left drag on handles to resize, inside the selection to move it,
+and outside the selection to pan. Space + left drag, middle drag and right drag
+also pan. Checks cover starting in the shaded area or outside the image, crossing
+the selection during a pan, releasing Space first, and recovering after focus loss.

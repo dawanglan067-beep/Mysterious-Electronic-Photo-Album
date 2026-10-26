@@ -461,6 +461,33 @@ int main(int argc, char **argv)
         sendMouse(QEvent::MouseMove, QPointF(230,220), Qt::NoButton, Qt::RightButton);
         sendMouse(QEvent::MouseButtonRelease, QPointF(230,220), Qt::RightButton, Qt::NoButton);
         check(canvas.selection() == beforeZoom, "zoom and pan leave crop image coordinates unchanged");
+        for (const auto button : {Qt::LeftButton, Qt::MiddleButton}) {
+            const QRectF displayBefore = canvas.imageRect();
+            if (button == Qt::LeftButton) QTest::keyPress(&canvas, Qt::Key_Space);
+            sendMouse(QEvent::MouseButtonPress, QPointF(200,200), button, button);
+            // Releasing Space first must not turn this gesture into a crop edit.
+            if (button == Qt::LeftButton) QTest::keyRelease(&canvas, Qt::Key_Space);
+            sendMouse(QEvent::MouseMove, QPointF(230,220), Qt::NoButton, button);
+            sendMouse(QEvent::MouseButtonRelease, QPointF(230,220), button, Qt::NoButton);
+            check(canvas.imageRect().topLeft() == displayBefore.topLeft() + QPointF(30,20)
+                  && canvas.selection() == beforeZoom,
+                  "space-left and middle drag pan canvas without editing crop");
+        }
+        QTest::keyPress(&canvas, Qt::Key_Space);
+        QFocusEvent focusOut(QEvent::FocusOut);
+        QApplication::sendEvent(&canvas, &focusOut);
+        for (const bool outsideImage : {false, true}) {
+            const QRectF displayBefore = canvas.imageRect();
+            const QPointF start = outsideImage ? displayBefore.topLeft() - QPointF(15,15)
+                                              : point(QPointF(5,5));
+            const QPointF finish = point(QRectF(desired).center());
+            sendMouse(QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
+            sendMouse(QEvent::MouseMove, finish, Qt::NoButton, Qt::LeftButton);
+            sendMouse(QEvent::MouseButtonRelease, finish, Qt::LeftButton, Qt::NoButton);
+            check((canvas.imageRect().topLeft() - displayBefore.topLeft() - (finish - start)).manhattanLength() < 0.001
+                  && canvas.selection() == beforeZoom,
+                  "plain left drag outside crop pans canvas even when crossing selection");
+        }
         canvas.resize(900, 600); app.processEvents();
         const QPointF resizedCenter = point(QRectF(desired).center());
         sendMouse(QEvent::MouseButtonPress, resizedCenter, Qt::LeftButton, Qt::LeftButton);
@@ -503,6 +530,79 @@ int main(int argc, char **argv)
             check(viewer.isModified(), "reset colors does not clear crop modification");
         }
         check(readFile(path) == bytesBefore, "crop and history preserve original file");
+        viewer.hide();
+    }
+
+    {
+        QImage source(180, 100, QImage::Format_RGB32);
+        for (int y = 0; y < source.height(); ++y)
+            for (int x = 0; x < source.width(); ++x)
+                source.setPixelColor(x, y, QColor(x, y * 2, (x + y) % 256));
+        const QString path = temporary.filePath("compare-original.png");
+        check(source.save(path), "create comparison fixture");
+        PicShow viewer; viewer.resize(1200, 800); viewer.show(); app.processEvents();
+        auto *button = viewer.findChild<QPushButton*>("photoCompareButton");
+        auto *canvas = viewer.findChild<QLabel*>("label");
+        auto *history = viewer.findChild<QUndoStack*>("photoUndoStack");
+        check(button && !button->isEnabled(), "comparison disabled without source");
+        viewer.SlotSelectItem(path); app.processEvents();
+        const auto invoke = [&](const char *slot) { QMetaObject::invokeMethod(&viewer, slot, Qt::DirectConnection); };
+        if (button && canvas && history) {
+            const auto pixel = [&](double x, double y) {
+                const QImage image = canvas->grab().toImage();
+                return image.pixelColor(qRound(image.width()*x), qRound(image.height()*y));
+            };
+            const QColor originalCenter = pixel(0.5, 0.5), originalLeft = pixel(0.3, 0.5);
+            const auto checkCompare = [&]() {
+                const QImage edited = canvas->grab().toImage();
+                const int count = history->count(), index = history->index();
+                const bool modified = viewer.isModified();
+                QTest::mousePress(button, Qt::LeftButton);
+                check(pixel(0.5,0.5) == originalCenter && pixel(0.3,0.5) == originalLeft,
+                      "held comparison shows source pixels fitted independently");
+                check(history->count() == count && history->index() == index && viewer.isModified() == modified,
+                      "comparison preserves history and modification state");
+                QTest::mouseRelease(button, Qt::LeftButton);
+                check(canvas->grab().toImage() == edited, "release restores edited pixels and viewport");
+            };
+            viewer.findChildren<QSlider*>().first()->setValue(40);
+            checkCompare();
+            invoke("SlotRotateRight"); invoke("SlotFlipH");
+            checkCompare();
+            QTimer::singleShot(30, &viewer, [&]() {
+                if (auto *dialog = qobject_cast<CropDialog*>(QApplication::activeModalWidget())) {
+                    dialog->findChild<CropCanvas*>()->setSelection(QRect(10,20,50,80));
+                    dialog->accept();
+                }
+            });
+            invoke("SlotCrop"); invoke("SlotZoomIn");
+            checkCompare();
+            QTest::mousePress(button, Qt::LeftButton);
+            viewer.SlotSelectItem(path);
+            QTest::mouseRelease(button, Qt::LeftButton);
+            check(!viewer.isModified() && history->count() == 0 && pixel(0.5,0.5) == originalCenter,
+                  "switching photo cancels held comparison");
+            viewer.findChildren<QSlider*>().first()->setValue(20);
+            const auto edited = canvas->grab().toImage();
+            QTest::mousePress(button, Qt::LeftButton);
+            QEvent deactivate(QEvent::WindowDeactivate); QApplication::sendEvent(&viewer, &deactivate);
+            check(canvas->grab().toImage() == edited, "deactivation cancels comparison");
+            QTest::mouseRelease(button, Qt::LeftButton);
+            QTest::mousePress(button, Qt::LeftButton);
+            viewer.hide(); viewer.show(); app.processEvents();
+            check(canvas->grab().toImage() == edited, "hiding viewer cancels comparison");
+            QTest::mouseRelease(button, Qt::LeftButton);
+            QTest::mousePress(button, Qt::LeftButton);
+            viewer.Clear();
+            check(!button->isEnabled() && !viewer.isModified(), "clear ends comparison and disables button");
+            viewer.SlotSelectItem(path);
+            viewer.findChildren<QSlider*>().first()->setValue(20);
+            check(pixel(0.5,0.5) != originalCenter, "clear does not leave original comparison active");
+            QTest::mousePress(button, Qt::LeftButton);
+            viewer.SlotSelectItem(temporary.filePath("compare-missing.png"));
+            check(!button->isEnabled() && history->count() == 0, "failed load cancels comparison");
+            QTest::mouseRelease(button, Qt::LeftButton);
+        }
         viewer.hide();
     }
     QList<PhotoEntry> photos;

@@ -23,6 +23,9 @@ protected:
     void mouseMoveEvent(QMouseEvent *) override;
     void mouseReleaseEvent(QMouseEvent *) override;
     void wheelEvent(QWheelEvent *) override;
+    void keyPressEvent(QKeyEvent *) override;
+    void keyReleaseEvent(QKeyEvent *) override;
+    void focusOutEvent(QFocusEvent *) override;
 private:
     QPointF toImage(const QPointF &point) const;
     QVector<QPointF> handles() const;
@@ -32,6 +35,8 @@ private:
     int _handle = -1;
     bool _moving = false;
     bool _panning = false;
+    Qt::MouseButton _panButton = Qt::NoButton;
+    bool _spaceHeld = false;
     QPointF _start;
     QRect _startRect;
     QPointF _pan;

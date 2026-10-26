@@ -3,6 +3,8 @@
 #include <QDialogButtonBox>
 #include <QLabel>
 #include <QLineF>
+#include <QKeyEvent>
+#include <QFocusEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -18,6 +20,7 @@ CropCanvas::CropCanvas(const QImage &image, QWidget *parent)
     setObjectName("cropCanvas");
     setMinimumSize(320, 240);
     setMouseTracking(true);
+    setFocusPolicy(Qt::StrongFocus);
 }
 
 QRectF CropCanvas::imageRect() const
@@ -113,9 +116,14 @@ void CropCanvas::paintEvent(QPaintEvent *)
 void CropCanvas::mousePressEvent(QMouseEvent *event)
 {
     if (_image.isNull()) return;
-    if (event->button() == Qt::RightButton) {
+    if (_panning || _moving || _handle >= 0) return;
+    setFocus(Qt::MouseFocusReason);
+    if (event->button() == Qt::MiddleButton || event->button() == Qt::RightButton
+        || (event->button() == Qt::LeftButton && _spaceHeld)) {
         _panning = true;
+        _panButton = event->button();
         _lastMouse = event->position();
+        setCursor(Qt::ClosedHandCursor);
         return;
     }
     if (event->button() != Qt::LeftButton) return;
@@ -131,6 +139,12 @@ void CropCanvas::mousePressEvent(QMouseEvent *event)
         }
     }
     _moving = _handle < 0 && QRectF(_selection).contains(_start);
+    if (_handle < 0 && !_moving) {
+        _panning = true;
+        _panButton = Qt::LeftButton;
+        _lastMouse = event->position();
+        setCursor(Qt::ClosedHandCursor);
+    }
 }
 
 void CropCanvas::mouseMoveEvent(QMouseEvent *event)
@@ -200,7 +214,47 @@ void CropCanvas::mouseMoveEvent(QMouseEvent *event)
 void CropCanvas::mouseReleaseEvent(QMouseEvent *event)
 {
     if (event->button() == Qt::LeftButton) { _moving = false; _handle = -1; }
-    if (event->button() == Qt::RightButton) _panning = false;
+    if (event->button() == _panButton) {
+        _panning = false;
+        _panButton = Qt::NoButton;
+        if (_spaceHeld) setCursor(Qt::OpenHandCursor);
+        else unsetCursor();
+    }
+}
+
+void CropCanvas::keyPressEvent(QKeyEvent *event)
+{
+    if (event->key() == Qt::Key_Space) {
+        _spaceHeld = true;
+        if (!_panning) setCursor(Qt::OpenHandCursor);
+        event->accept();
+        return;
+    }
+    QWidget::keyPressEvent(event);
+}
+
+void CropCanvas::keyReleaseEvent(QKeyEvent *event)
+{
+    if (event->key() == Qt::Key_Space) {
+        if (!event->isAutoRepeat()) {
+            _spaceHeld = false;
+            if (!_panning) unsetCursor();
+        }
+        event->accept();
+        return;
+    }
+    QWidget::keyReleaseEvent(event);
+}
+
+void CropCanvas::focusOutEvent(QFocusEvent *event)
+{
+    _spaceHeld = false;
+    _panning = false;
+    _panButton = Qt::NoButton;
+    _moving = false;
+    _handle = -1;
+    unsetCursor();
+    QWidget::focusOutEvent(event);
 }
 
 void CropCanvas::wheelEvent(QWheelEvent *event)
@@ -230,7 +284,9 @@ CropDialog::CropDialog(const QImage &image, const QSize &originalSize, QWidget *
     for (const auto &size : {QSize(1, 1), QSize(4, 3), QSize(3, 2), QSize(16, 9)})
         ratio->addItem(QString("%1:%2").arg(size.width()).arg(size.height()), size);
     layout->addWidget(ratio);
-    layout->addWidget(new QLabel(tr("拖动选区移动，拖动八个控制点调整；滚轮缩放，右键拖动画布。Enter 应用，Esc 取消。"), this));
+    auto *hint = new QLabel(tr("左键：拖控制点调整大小，拖框内移动选区，拖框外移动画布；滚轮缩放。Enter 应用，Esc 取消。"), this);
+    hint->setWordWrap(true);
+    layout->addWidget(hint);
     layout->addWidget(_canvas, 1);
     auto *dimensions = new QLabel(this);
     dimensions->setObjectName("cropDimensions");
@@ -250,6 +306,7 @@ CropDialog::CropDialog(const QImage &image, const QSize &originalSize, QWidget *
     connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
     updateDimensions(_canvas->selection());
+    _canvas->setFocus();
 }
 
 QRect CropDialog::selection() const { return _canvas->selection(); }

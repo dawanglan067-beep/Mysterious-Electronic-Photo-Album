@@ -56,6 +56,9 @@ private:
     // 重置视图缩放与平移偏移（自适应窗口）
     void ResetViewFit();
     void SyncControlsFromDocument();
+    void SetOriginalComparison(bool enabled);
+    bool _show_original = false;
+    QPushButton *_compare_button = nullptr;
 
     friend class PhotoEditCommand;
     void ApplyEditState(const PhotoEditDocument::EditState &state);

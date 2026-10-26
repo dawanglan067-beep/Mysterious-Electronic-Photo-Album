@@ -292,6 +292,13 @@ void PicShow::InitStudioUI()
     algoBtnRow->addWidget(btnResetAlgo);
     algoBtnRow->addWidget(btnSaveImg);
     infoLayout->addLayout(algoBtnRow);
+    _compare_button = new QPushButton(tr("按住查看原图"), _info_panel);
+    _compare_button->setObjectName("photoCompareButton");
+    _compare_button->setToolTip(tr("按住显示完整原图（自适应窗口），释放恢复编辑结果及原有视图"));
+    _compare_button->setEnabled(false);
+    infoLayout->addWidget(_compare_button);
+    connect(_compare_button, &QPushButton::pressed, this, [this]() { SetOriginalComparison(true); });
+    connect(_compare_button, &QPushButton::released, this, [this]() { SetOriginalComparison(false); });
     auto *cropButton = new QPushButton(tr("裁剪…"), _info_panel);
     cropButton->setObjectName("photoCropButton");
     infoLayout->addWidget(cropButton);
@@ -484,6 +491,7 @@ void PicShow::ReloadPic()
 // 清空当前展示的图片数据与路径，并刷新重绘为空白
 void PicShow::Clear()
 {
+    SetOriginalComparison(false);
     _parameter_dragging = false;
     _undo_stack->clear();
     _document.clear();
@@ -507,6 +515,10 @@ bool PicShow::event(QEvent *event)
 {
     switch(event->type())
     {
+    case QEvent::Hide:
+    case QEvent::WindowDeactivate:
+        SetOriginalComparison(false);
+        break;
     case QEvent::Enter:
         // 鼠标进入展示区，淡入显示上一张/下一张按钮
         ShowPreNextBtns(true);
@@ -526,6 +538,8 @@ bool PicShow::eventFilter(QObject *watched, QEvent *event)
 {
     if (watched == ui->label)
     {
+        if (_show_original && event->type() != QEvent::Paint)
+            return QDialog::eventFilter(watched, event);
         if (event->type() == QEvent::Wheel && !Original_map.isNull())
         {
             QWheelEvent *wheelEvent = static_cast<QWheelEvent*>(event);
@@ -612,13 +626,18 @@ bool PicShow::eventFilter(QObject *watched, QEvent *event)
                 return true;
             }
 
-            const int fullW = _document.outputSize().width();
-            const int fullH = _document.outputSize().height();
+            const QSize displaySize = _show_original ? _document.sourceImage().size() : _document.outputSize();
+            const int fullW = displaySize.width();
+            const int fullH = displaySize.height();
 
             // 基于未损耗的高清原图尺寸计算等比例适应 label 尺寸的基准绘制大小
             QSize base_size = QSize(fullW, fullH).scaled(ui->label->size(), Qt::KeepAspectRatio);
             QSizeF target_size;
-            if (_is_actual_pixel)
+            if (_show_original)
+            {
+                target_size = QSizeF(base_size);
+            }
+            else if (_is_actual_pixel)
             {
                 target_size = QSizeF(fullW, fullH);
             }
@@ -628,20 +647,24 @@ bool PicShow::eventFilter(QObject *watched, QEvent *event)
             }
 
             // 计算居中叠加鼠标拖拽平移后的目标矩形区域
-            double x = (ui->label->width() - target_size.width()) / 2.0 + _pan_offset.x();
-            double y = (ui->label->height() - target_size.height()) / 2.0 + _pan_offset.y();
+            const QPointF displayPan = _show_original ? QPointF() : _pan_offset;
+            double x = (ui->label->width() - target_size.width()) / 2.0 + displayPan.x();
+            double y = (ui->label->height() - target_size.height()) / 2.0 + displayPan.y();
             QRectF target_rect(x, y, target_size.width(), target_size.height());
 
             // 将高清原图绘制到目标矩形区域中
-            painter.drawPixmap(target_rect.toRect(), Original_map);
+            if (_show_original)
+                painter.drawImage(target_rect, _document.sourceImage());
+            else
+                painter.drawPixmap(target_rect.toRect(), Original_map);
 
             // 左上角绘制半透明 HUD 状态胶囊（显示当前缩放倍率、像素尺寸与旋转角度）
             QString hudText = QString(" %1  |  %2 × %3 px ")
-                                  .arg(_is_actual_pixel ? "1:1 原图" : QString("%1%").arg(qRound(_zoom_factor * 100)))
+                                  .arg(_show_original ? tr("原图对比 · 自适应") : (_is_actual_pixel ? "1:1 原图" : QString("%1%").arg(qRound(_zoom_factor * 100))))
                                   .arg(fullW)
                                   .arg(fullH);
             if (_document.isModified()) hudText += tr(" | 已修改 ");
-            if (_document.state().rotation != 0)
+            if (!_show_original && _document.state().rotation != 0)
             {
                 hudText += QString(" | 旋转 %1° ").arg(_document.state().rotation);
             }
@@ -897,6 +920,7 @@ void PicShow::ShowPreNextBtns(bool b_show)
 // 槽函数：选中/双击树节点时的图片加载逻辑
 void PicShow::SlotSelectItem(const QString &path)
 {
+    SetOriginalComparison(false);
     if (path.isEmpty())
     {
         Clear();
@@ -925,6 +949,7 @@ void PicShow::SlotUpdatePic(const QString &path)
 
 void PicShow::SyncControlsFromDocument()
 {
+    if (_compare_button) _compare_button->setEnabled(!_document.sourceImage().isNull());
     setProperty("photoModified", _document.isModified());
     setWindowTitle(_document.isModified() ? tr("照片编辑 * 已修改") : tr("照片编辑"));
     const auto parameters = _document.parameters();
@@ -999,4 +1024,13 @@ void PicShow::SlotCrop()
     auto after = before;
     after.crop = sourceCrop == _document.sourceImage().rect() ? QRect() : sourceCrop;
     PushEdit(before, after, tr("裁剪"));
+}
+
+void PicShow::SetOriginalComparison(bool enabled)
+{
+    const bool show = enabled && !_document.sourceImage().isNull();
+    if (_show_original == show) return;
+    _show_original = show;
+    if (!show && _compare_button) _compare_button->setDown(false);
+    ReloadPic();
 }
