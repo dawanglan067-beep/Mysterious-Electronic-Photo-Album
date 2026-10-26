@@ -51,6 +51,11 @@ Original comparison checks hold/release source pixels after color, geometry and 
 edits; restore zoomed view; preserve history and modification state; and clear the
 comparison on source switch, failed load, clear, hide and window deactivation.
 
+Restore-original checks combine crop, rotation, both mirrors, all color sliders
+and a filter; verify one history step, original preview pixels, clean modification
+state, control synchronization, undo/redo, repeated restore without extra history,
+source file preservation, and disabling the action after clear or failed loading.
+
 Crop canvas uses left drag on handles to resize, inside the selection to move it,
 and outside the selection to pan. Space + left drag, middle drag and right drag
 also pan. Checks cover starting in the shaded area or outside the image, crossing

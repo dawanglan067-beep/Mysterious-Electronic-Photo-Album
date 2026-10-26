@@ -299,6 +299,12 @@ void PicShow::InitStudioUI()
     infoLayout->addWidget(_compare_button);
     connect(_compare_button, &QPushButton::pressed, this, [this]() { SetOriginalComparison(true); });
     connect(_compare_button, &QPushButton::released, this, [this]() { SetOriginalComparison(false); });
+    _restore_original_button = new QPushButton(tr("恢复全部原图"), _info_panel);
+    _restore_original_button->setObjectName("photoRestoreOriginalButton");
+    _restore_original_button->setToolTip(tr("清除裁剪、旋转、镜像、调色和滤镜；可以撤销"));
+    _restore_original_button->setEnabled(false);
+    infoLayout->addWidget(_restore_original_button);
+    connect(_restore_original_button, &QPushButton::clicked, this, &PicShow::SlotRestoreOriginal);
     auto *cropButton = new QPushButton(tr("裁剪…"), _info_panel);
     cropButton->setObjectName("photoCropButton");
     infoLayout->addWidget(cropButton);
@@ -853,6 +859,15 @@ void PicShow::SlotResetAlgorithms()
     PushEdit(before, after, tr("还原参数"));
 }
 
+void PicShow::SlotRestoreOriginal()
+{
+    if (_document.sourceImage().isNull()) return;
+    SetOriginalComparison(false);
+    FinishParameterDrag();
+    // 恢复本身是一条历史记录，保留恢复前的完整编辑状态。
+    PushEdit(_document.state(), PhotoEditDocument::EditState{}, tr("恢复全部原图"));
+}
+
 void PicShow::SlotSaveProcessedImage()
 {
     if (Original_map.isNull())
@@ -950,6 +965,7 @@ void PicShow::SlotUpdatePic(const QString &path)
 void PicShow::SyncControlsFromDocument()
 {
     if (_compare_button) _compare_button->setEnabled(!_document.sourceImage().isNull());
+    if (_restore_original_button) _restore_original_button->setEnabled(!_document.sourceImage().isNull());
     setProperty("photoModified", _document.isModified());
     setWindowTitle(_document.isModified() ? tr("照片编辑 * 已修改") : tr("照片编辑"));
     const auto parameters = _document.parameters();

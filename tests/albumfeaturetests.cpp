@@ -542,10 +542,13 @@ int main(int argc, char **argv)
         check(source.save(path), "create comparison fixture");
         PicShow viewer; viewer.resize(1200, 800); viewer.show(); app.processEvents();
         auto *button = viewer.findChild<QPushButton*>("photoCompareButton");
+        auto *restore = viewer.findChild<QPushButton*>("photoRestoreOriginalButton");
         auto *canvas = viewer.findChild<QLabel*>("label");
         auto *history = viewer.findChild<QUndoStack*>("photoUndoStack");
         check(button && !button->isEnabled(), "comparison disabled without source");
+        check(restore && !restore->isEnabled(), "restore original disabled without source");
         viewer.SlotSelectItem(path); app.processEvents();
+        const auto sourceBytes = readFile(path);
         const auto invoke = [&](const char *slot) { QMetaObject::invokeMethod(&viewer, slot, Qt::DirectConnection); };
         if (button && canvas && history) {
             const auto pixel = [&](double x, double y) {
@@ -553,6 +556,7 @@ int main(int argc, char **argv)
                 return image.pixelColor(qRound(image.width()*x), qRound(image.height()*y));
             };
             const QColor originalCenter = pixel(0.5, 0.5), originalLeft = pixel(0.3, 0.5);
+            const QImage originalPreview = canvas->grab().toImage();
             const auto checkCompare = [&]() {
                 const QImage edited = canvas->grab().toImage();
                 const int count = history->count(), index = history->index();
@@ -577,6 +581,34 @@ int main(int argc, char **argv)
             });
             invoke("SlotCrop"); invoke("SlotZoomIn");
             checkCompare();
+            invoke("SlotFlipV");
+            auto sliders = viewer.findChildren<QSlider*>();
+            for (auto *slider : sliders) slider->setValue(25);
+            auto *filter = viewer.findChild<QComboBox*>();
+            filter->setCurrentIndex(filter->findData(ImageProcessor::FilterInvert));
+            invoke("SlotZoomFit");
+            const auto beforeRestore = canvas->grab().toImage();
+            const int restoreIndex = history->index();
+            if (restore) QTest::mouseClick(restore, Qt::LeftButton);
+            check(!viewer.isModified() && !viewer.property("photoModified").toBool()
+                  && history->index() == restoreIndex + 1
+                  && history->undoText() == QString::fromUtf8("恢复全部原图")
+                  && canvas->grab().toImage() == originalPreview,
+                  "restore clears crop geometry and colors in one history step");
+            bool controlsReset = filter->currentData().toInt() == ImageProcessor::FilterNone;
+            for (auto *slider : sliders) controlsReset &= slider->value() == 0;
+            check(controlsReset, "restore synchronizes all color controls");
+            const int restoredCount = history->count();
+            invoke("SlotRestoreOriginal");
+            check(history->count() == restoredCount, "restoring original twice adds no empty command");
+            invoke("SlotUndo");
+            check(viewer.isModified() && canvas->grab().toImage() == beforeRestore
+                  && filter->currentData().toInt() == ImageProcessor::FilterInvert,
+                  "undo restore recovers complete edited pixels and controls");
+            invoke("SlotRedo");
+            check(!viewer.isModified() && canvas->grab().toImage() == originalPreview,
+                  "redo restore returns to original pixels and clean state");
+            check(readFile(path) == sourceBytes, "restore never writes the source file");
             QTest::mousePress(button, Qt::LeftButton);
             viewer.SlotSelectItem(path);
             QTest::mouseRelease(button, Qt::LeftButton);
@@ -595,12 +627,16 @@ int main(int argc, char **argv)
             QTest::mousePress(button, Qt::LeftButton);
             viewer.Clear();
             check(!button->isEnabled() && !viewer.isModified(), "clear ends comparison and disables button");
+            check(restore && !restore->isEnabled(), "clear disables restore original");
             viewer.SlotSelectItem(path);
             viewer.findChildren<QSlider*>().first()->setValue(20);
             check(pixel(0.5,0.5) != originalCenter, "clear does not leave original comparison active");
             QTest::mousePress(button, Qt::LeftButton);
             viewer.SlotSelectItem(temporary.filePath("compare-missing.png"));
             check(!button->isEnabled() && history->count() == 0, "failed load cancels comparison");
+            invoke("SlotRestoreOriginal");
+            check(restore && !restore->isEnabled() && history->count() == 0,
+                  "failed load disables restore and empty restore leaves history unchanged");
             QTest::mouseRelease(button, Qt::LeftButton);
         }
         viewer.hide();

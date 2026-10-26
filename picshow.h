@@ -59,6 +59,7 @@ private:
     void SetOriginalComparison(bool enabled);
     bool _show_original = false;
     QPushButton *_compare_button = nullptr;
+    QPushButton *_restore_original_button = nullptr;
 
     friend class PhotoEditCommand;
     void ApplyEditState(const PhotoEditDocument::EditState &state);
@@ -123,6 +124,7 @@ private slots:
     void SlotOpenInExplorer();
     void SlotAdjustParamsChanged();
     void SlotResetAlgorithms();
+    void SlotRestoreOriginal();
     void SlotSaveProcessedImage();
 
 public slots:
