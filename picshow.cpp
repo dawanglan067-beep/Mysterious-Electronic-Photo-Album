@@ -1,6 +1,8 @@
 #include "picshow.h"
 #include "ui_picshow.h"
 #include "cropdialog.h"
+#include "imageexportservice.h"
+#include <QInputDialog>
 #include <QGraphicsOpacityEffect>
 #include <QPropertyAnimation>
 #include <QPainter>
@@ -870,28 +872,58 @@ void PicShow::SlotRestoreOriginal()
 
 void PicShow::SlotSaveProcessedImage()
 {
-    if (Original_map.isNull())
+    if (_document.sourceImage().isNull())
     {
         return;
     }
-    QFileInfo fi(_document.sourcepath());
-    QString defaultPath = fi.dir().absoluteFilePath(fi.completeBaseName() + "_edited." + (fi.suffix().isEmpty() ? "png" : fi.suffix()));
+    SetOriginalComparison(false);
+    FinishParameterDrag();
+    const QFileInfo fi(_document.sourcepath());
+    const auto extensions = ImageExportService::supportedExtensions();
+    QStringList filters;
+    if (extensions.contains("png")) filters << tr("PNG 图像 (*.png)");
+    if (extensions.contains("jpg")) filters << tr("JPEG 图像 (*.jpg *.jpeg)");
+    if (extensions.contains("bmp")) filters << tr("BMP 图像 (*.bmp)");
+    if (filters.isEmpty()) {
+        QMessageBox::warning(this, tr("导出失败"), tr("当前环境没有可用的图片编码器。"));
+        return;
+    }
+    const QString defaultExtension = extensions.first();
+    const QString defaultPath = fi.dir().absoluteFilePath(fi.completeBaseName() + "_edited." + defaultExtension);
+    QString selectedFilter = filters.first();
     QString savePath = QFileDialog::getSaveFileName(
         this,
         tr("导出处理后的图像"),
         defaultPath,
-        tr("PNG 图像 (*.png);;JPEG 图像 (*.jpg *.jpeg);;BMP 图像 (*.bmp)"));
+        filters.join(";;"), &selectedFilter);
     if (savePath.isEmpty())
     {
         return;
     }
-    if (Original_map.save(savePath))
+    if (QFileInfo(savePath).suffix().isEmpty()) {
+        const QString extension = selectedFilter == tr("JPEG 图像 (*.jpg *.jpeg)") ? "jpg"
+            : (selectedFilter == tr("BMP 图像 (*.bmp)") ? "bmp" : "png");
+        savePath += "." + extension;
+        if (QFileInfo::exists(savePath)
+            && QMessageBox::question(this, tr("覆盖输出文件"), tr("文件已存在，是否替换？\n%1").arg(savePath)) != QMessageBox::Yes)
+            return;
+    }
+    ImageExportService::Options options;
+    const auto suffix = QFileInfo(savePath).suffix().toLower();
+    if (suffix == "jpg" || suffix == "jpeg") {
+        bool accepted = false;
+        options.jpegQuality = QInputDialog::getInt(this, tr("JPEG 导出"),
+            tr("质量（0–100，透明区域使用白色背景）："), 95, 0, 100, 1, &accepted);
+        if (!accepted) return;
+    }
+    const auto result = ImageExportService::exportDocument(_document, savePath, options);
+    if (result.success)
     {
         QMessageBox::information(this, tr("导出成功"), tr("处理后的图像已成功保存至：\n%1").arg(savePath));
     }
     else
     {
-        QMessageBox::warning(this, tr("导出失败"), tr("无法写入目标图像文件，请检查路径权限。"));
+        QMessageBox::warning(this, tr("导出失败"), result.error);
     }
 }
 

@@ -11,6 +11,7 @@
 #include <QWheelEvent>
 #include <QTransform>
 #include "imageprocessor.h"
+#include "imageexportservice.h"
 #include "duplicatephotofinder.h"
 #include "workspacesettings.h"
 #include "musiccontroller.h"
@@ -86,6 +87,72 @@ int main(int argc, char **argv)
     check(temporary.isValid(), "temporary test directory");
     const QString outputDir = app.arguments().size() > 1 ? app.arguments().at(1) : temporary.path();
     QDir().mkpath(outputDir);
+    {
+        QImage source(1900, 1000, QImage::Format_ARGB32);
+        source.fill(QColor(30, 80, 150, 120));
+        const QString sourcePath = temporary.filePath("export-source.png");
+        check(source.save(sourcePath), "create full resolution export source");
+        const auto sourceBytes = readFile(sourcePath);
+        PhotoEditDocument document;
+        check(document.load(sourcePath), "load export document");
+        auto state = document.state();
+        state.crop = QRect(30, 50, 1800, 800);
+        state.rotation = 90;
+        state.flipHorizontal = true;
+        state.flipVertical = true;
+        state.parameters = {15, -10, 20, ImageProcessor::FilterInvert};
+        document.setState(state);
+        const QImage expected = document.Render();
+        check(document.Render(1600).size() != expected.size(), "export fixture has smaller drag preview");
+        const QString png = temporary.filePath("完整尺寸.PNG");
+        auto result = ImageExportService::exportDocument(document, png);
+        check(result.success && QImage(png) == expected && QImage(png).size() == QSize(800,1800),
+              "PNG export preserves full dimensions transformed pixels colors and alpha");
+        check(document.state() == state && document.isModified(), "export preserves document edits and content modified state");
+        auto next = state; next.parameters.brightness = -30; document.setState(next);
+        result = ImageExportService::exportDocument(document, png);
+        check(result.success && QImage(png) == document.Render(), "safe export replaces existing output successfully");
+        for (const auto &path : {sourcePath, temporary.path() + "/./export-source.png"}) {
+            result = ImageExportService::exportDocument(document, path);
+            check(!result.success && readFile(sourcePath) == sourceBytes, "export rejects source path and normalized alias");
+        }
+#ifdef Q_OS_WIN
+        result = ImageExportService::exportDocument(document, sourcePath.toUpper());
+        check(!result.success && readFile(sourcePath) == sourceBytes, "source protection ignores Windows path case");
+#endif
+        const QString unsupported = temporary.filePath("existing.gif");
+        QFile sentinel(unsupported); sentinel.open(QIODevice::WriteOnly); sentinel.write("keep-existing"); sentinel.close();
+        result = ImageExportService::exportDocument(document, unsupported);
+        check(!result.success && readFile(unsupported) == QByteArray("keep-existing"), "unsupported format preserves existing output");
+        const auto previous = readFile(png);
+        result = ImageExportService::writeImage({}, png, {sourcePath});
+        check(!result.success && readFile(png) == previous, "empty image failure preserves existing output");
+        check(!ImageExportService::exportDocument(document, temporary.filePath("missing/output.png")).success,
+              "invalid destination reports failure");
+        const QString directoryTarget = temporary.filePath("directory.png");
+        QDir().mkpath(directoryTarget);
+        QFile marker(directoryTarget + "/keep"); marker.open(QIODevice::WriteOnly); marker.write("keep"); marker.close();
+        check(!ImageExportService::exportDocument(document, directoryTarget).success
+              && readFile(directoryTarget + "/keep") == QByteArray("keep"), "failed target replacement preserves directory contents");
+        QImage transparent(64,64,QImage::Format_ARGB32); transparent.fill(Qt::transparent);
+        const QString jpeg = temporary.filePath("transparent.jpeg");
+        result = ImageExportService::writeImage(transparent, jpeg, {});
+        const QImage decoded(jpeg);
+        check(result.success && decoded.size() == transparent.size() && !decoded.hasAlphaChannel()
+              && decoded.pixelColor(32,32) == QColor(Qt::white), "JPEG transparent pixels use white background");
+        ImageExportService::Options options; options.jpegQuality = 100; options.jpegBackground = QColor(40,80,120);
+        result = ImageExportService::writeImage(transparent, jpeg, {}, options);
+        const QColor background = QImage(jpeg).pixelColor(32,32);
+        check(result.success && qAbs(background.red()-40) <= 3 && qAbs(background.green()-80) <= 3
+              && qAbs(background.blue()-120) <= 3, "JPEG honors quality and opaque background options");
+        const auto jpegBefore = readFile(jpeg); options.jpegQuality = 101;
+        check(!ImageExportService::writeImage(transparent, jpeg, {}, options).success && readFile(jpeg) == jpegBefore,
+              "invalid JPEG options preserve existing file");
+        const QString bmp = temporary.filePath("export.bmp");
+        check(ImageExportService::writeImage(decoded, bmp, {}).success && QImage(bmp) == decoded,
+              "BMP export remains available");
+        check(readFile(sourcePath) == sourceBytes, "all export paths preserve source bytes");
+    }
     {
         QImage input(5, 5, QImage::Format_ARGB32);
         for (int y = 0; y < 5; ++y)

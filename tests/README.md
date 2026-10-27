@@ -4,6 +4,16 @@ Configure with `-DALBUM_BUILD_FEATURE_TESTS=ON`, build, then run
 `ctest --test-dir build-msvc --output-on-failure` in your Qt/MSVC environment.
 The option defaults to OFF for normal application builds.
 
+Image export checks cover full-resolution document rendering beyond the drag-preview
+limit, crop/rotation/mirrors/colors, PNG pixel and alpha preservation, JPEG quality
+and opaque backgrounds, BMP, replacing existing outputs, source path aliases,
+invalid formats/options/images/destinations and preservation of existing files.
+Manual export acceptance: select PNG/JPEG/BMP in the actual save dialog, omit an
+extension, cancel file/quality selection, confirm replacement of an existing output,
+and attempt to export onto the source. JPEG transparent areas use white in the UI.
+Successful export preserves content modification state; export-state tracking and
+leave reminders belong to the next stage.
+
 Editor history checks cover slider gesture grouping, keyboard shortcuts with slider
 focus, filter/reset undo, rotation/mirroring pixel restoration, redo branch removal,
 and history isolation on switching/clearing/failed loading.

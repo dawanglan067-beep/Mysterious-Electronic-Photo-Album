@@ -43,6 +43,7 @@ qt_add_executable(Album
     albumfolderpicker.h albumfolderpicker.cpp
     histogramwidget.h histogramwidget.cpp
     imageprocessor.h imageprocessor.cpp
+    imageexportservice.h imageexportservice.cpp
     musiccontroller.h musiccontroller.cpp
     musicsettingsdialog.h musicsettingsdialog.cpp
     audiofileprobe.h audiofileprobe.cpp
