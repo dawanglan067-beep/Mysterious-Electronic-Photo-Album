@@ -880,9 +880,14 @@ void PicShow::SlotRestoreOriginal()
 
 void PicShow::SlotSaveProcessedImage()
 {
+    ExportProcessedImage();
+}
+
+bool PicShow::ExportProcessedImage(const QStringList &protectedPaths)
+{
     if (_document.sourceImage().isNull())
     {
-        return;
+        return false;
     }
     SetOriginalComparison(false);
     FinishParameterDrag();
@@ -894,7 +899,7 @@ void PicShow::SlotSaveProcessedImage()
     if (extensions.contains("bmp")) filters << tr("BMP 图像 (*.bmp)");
     if (filters.isEmpty()) {
         QMessageBox::warning(this, tr("导出失败"), tr("当前环境没有可用的图片编码器。"));
-        return;
+        return false;
     }
     const QString defaultExtension = extensions.first();
     const QString defaultPath = fi.dir().absoluteFilePath(fi.completeBaseName() + "_edited." + defaultExtension);
@@ -906,7 +911,7 @@ void PicShow::SlotSaveProcessedImage()
         filters.join(";;"), &selectedFilter);
     if (savePath.isEmpty())
     {
-        return;
+        return false;
     }
     if (QFileInfo(savePath).suffix().isEmpty()) {
         const QString extension = selectedFilter == tr("JPEG 图像 (*.jpg *.jpeg)") ? "jpg"
@@ -914,7 +919,7 @@ void PicShow::SlotSaveProcessedImage()
         savePath += "." + extension;
         if (QFileInfo::exists(savePath)
             && QMessageBox::question(this, tr("覆盖输出文件"), tr("文件已存在，是否替换？\n%1").arg(savePath)) != QMessageBox::Yes)
-            return;
+            return false;
     }
     ImageExportService::Options options;
     const auto suffix = QFileInfo(savePath).suffix().toLower();
@@ -922,7 +927,37 @@ void PicShow::SlotSaveProcessedImage()
         bool accepted = false;
         options.jpegQuality = QInputDialog::getInt(this, tr("JPEG 导出"),
             tr("质量（0–100，透明区域使用白色背景）："), 95, 0, 100, 1, &accepted);
-        if (!accepted) return;
+        if (!accepted) return false;
+    }
+    // 删除前导出的副本不能落在同一批即将删除的文件上。
+    for (const auto &protectedPath : protectedPaths) {
+        const QFileInfo output(savePath), protectedFile(protectedPath);
+#ifdef Q_OS_WIN
+        const auto sensitivity = Qt::CaseInsensitive;
+#else
+        const auto sensitivity = Qt::CaseSensitive;
+#endif
+        if (QDir::cleanPath(output.absoluteFilePath()).compare(
+                QDir::cleanPath(protectedFile.absoluteFilePath()), sensitivity) == 0
+            || (!output.canonicalFilePath().isEmpty() && output.canonicalFilePath().compare(
+                    protectedFile.canonicalFilePath(), sensitivity) == 0)) {
+            QMessageBox::warning(this, tr("导出未完成"), tr("副本不能保存到本次准备删除的文件，请选择其他位置。"));
+            return false;
+        }
+        if (protectedFile.isDir()) {
+            const auto inside = [sensitivity](const QString &file, const QString &directory) {
+                if (file.isEmpty() || directory.isEmpty()) return false;
+                return file.startsWith(directory.endsWith('/') ? directory : directory + '/', sensitivity);
+            };
+            // 即使输出文件还不存在，也验证其父目录的实际路径，防止经目录别名写回待删除文件夹。
+            const QString canonicalOutput = QDir(QFileInfo(output.absolutePath()).canonicalFilePath())
+                .filePath(output.fileName());
+            if (inside(QDir::cleanPath(output.absoluteFilePath()), QDir::cleanPath(protectedFile.absoluteFilePath()))
+                || inside(canonicalOutput, protectedFile.canonicalFilePath())) {
+                QMessageBox::warning(this, tr("导出未完成"), tr("副本不能保存在本次准备删除的文件夹内，请选择其他位置。"));
+                return false;
+            }
+        }
     }
     const auto result = ImageExportService::exportDocument(_document, savePath, options);
     if (result.success)
@@ -933,6 +968,41 @@ void PicShow::SlotSaveProcessedImage()
     {
         QMessageBox::warning(this, tr("导出失败"), result.error);
     }
+    return result.success;
+}
+
+bool PicShow::IsEditingPath(const QString &path) const
+{
+    if (path.isEmpty() || _document.sourcepath().isEmpty()) return false;
+    const auto normalized = [](const QString &file) {
+        const QFileInfo info(file);
+        return info.canonicalFilePath().isEmpty() ? QDir::cleanPath(info.absoluteFilePath()) : info.canonicalFilePath();
+    };
+#ifdef Q_OS_WIN
+    return normalized(path).compare(normalized(_document.sourcepath()), Qt::CaseInsensitive) == 0;
+#else
+    return normalized(path) == normalized(_document.sourcepath());
+#endif
+}
+
+bool PicShow::ConfirmDeletionOfEditedPhoto(const QStringList &deletionPaths)
+{
+    if (!_document.isModified()) return true;
+    QMessageBox prompt(QMessageBox::Warning, tr("当前图片有编辑内容"),
+        tr("当前图片有修改。删除后将无法继续使用该源文件；可以先导出副本。\n%1").arg(_document.sourcepath()),
+        QMessageBox::NoButton, this);
+    prompt.setObjectName("photoDeleteEditPrompt");
+    auto *exportButton = prompt.addButton(tr("导出副本后删除"), QMessageBox::AcceptRole);
+    exportButton->setObjectName("deleteExportButton");
+    auto *discardButton = prompt.addButton(tr("不导出，继续删除"), QMessageBox::DestructiveRole);
+    discardButton->setObjectName("deleteDiscardButton");
+    auto *cancel = prompt.addButton(QMessageBox::Cancel);
+    cancel->setText(tr("取消"));
+    prompt.setDefaultButton(cancel);
+    prompt.exec();
+    if (prompt.clickedButton() == exportButton) return ExportProcessedImage(deletionPaths);
+    // 不在这里清空文档或历史，回收站操作失败仍要保留当前编辑。
+    return prompt.clickedButton() == discardButton;
 }
 
 // 控制上一张/下一张按钮的渐变动画逻辑

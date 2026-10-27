@@ -1,5 +1,7 @@
 #include "protreewidget.h"
 #include "albumfolderpicker.h"
+#include "phototrashservice.h"
+#include <QSignalBlocker>
 #include "duplicatephotofinder.h"
 #include <QDir>
 #include <QIcon>
@@ -149,10 +151,36 @@ ProTreeWidget::ProTreeWidget(QWidget *parent): QTreeWidget(parent)
     connect(_action_slideshow,&QAction::triggered,this,&ProTreeWidget::SlotSlideShow);
     connect(_action_detect_dup,&QAction::triggered,this,&ProTreeWidget::SlotDetectDuplicates);
     connect(_action_toggle_fav,&QAction::triggered,this,&ProTreeWidget::SlotToggleFavorite);
+    _action_trash_photo = new QAction(tr("删除图片／素材（移到回收站）"), this);
+    _action_trash_photo->setObjectName("treeTrashPhotoAction");
+    connect(_action_trash_photo, &QAction::triggered, this, [this]() {
+        auto *photo = dynamic_cast<ProTreeItem*>(_right_btn_item);
+        if (photo && photo->type() == TreeItemPic) emit SigDeletePhotosRequested({photo->GetPath()});
+    });
+    _action_hide_folder = new QAction(tr("隐藏文件夹（本次运行）"), this);
+    _action_hide_folder->setObjectName("treeHideFolderAction");
+    connect(_action_hide_folder, &QAction::triggered, this, [this]() {
+        auto *folder = dynamic_cast<ProTreeItem*>(_right_btn_item);
+        if (folder && folder->type() == TreeItemDir) HideFolder(folder->GetPath());
+    });
+    _action_trash_folder = new QAction(tr("删除文件夹（移到回收站）…"), this);
+    _action_trash_folder->setObjectName("treeTrashFolderAction");
+    connect(_action_trash_folder, &QAction::triggered, this, [this]() {
+        auto *folder = dynamic_cast<ProTreeItem*>(_right_btn_item);
+        if (folder && folder->type() == TreeItemDir) emit SigDeleteFolderRequested(folder->GetPath());
+    });
+    _action_show_folders = new QAction(tr("显示已隐藏文件夹（含空素材目录）"), this);
+    _action_show_folders->setObjectName("treeShowFoldersAction");
+    connect(_action_show_folders, &QAction::triggered, this, [this]() {
+        auto *root = dynamic_cast<ProTreeItem*>(_right_btn_item);
+        if (root && root->type() == TreeItemPro) ShowHiddenFolders(root->GetPath());
+    });
 
     // 支持键盘上下方向键或单击切换当前树节点时，联动更新右侧图片预览
     connect(this, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem *current, QTreeWidgetItem *) {
         emit SigPhotoSetChanged();
+        // 右键只打开操作菜单，不先切走当前编辑图，避免删除确认前丢失编辑。
+        if (QGuiApplication::mouseButtons() & Qt::RightButton) return;
         if (!current || current->type() != TreeItemPic || current->isHidden())
         {
             return;
@@ -253,6 +281,7 @@ void ProTreeWidget::SlotItemPressed(QTreeWidgetItem *item, int column)
             menu.addAction(_action_setstart);
             menu.addAction(_action_slideshow);
             menu.addAction(_action_detect_dup);
+            menu.addAction(_action_show_folders);
             menu.addSeparator();
             menu.addAction(_action_closepro);
             menu.exec(QCursor::pos());
@@ -267,8 +296,18 @@ void ProTreeWidget::SlotItemPressed(QTreeWidgetItem *item, int column)
                 bool isFav = _favorite_paths.contains(picItem->GetPath());
                 _action_toggle_fav->setText(isFav ? tr("取消星标收藏") : tr("设为星标收藏"));
                 menu.addAction(_action_toggle_fav);
+                menu.addSeparator();
+                menu.addAction(_action_trash_photo);
                 menu.exec(QCursor::pos());
             }
+            _right_btn_item = nullptr;
+        }
+        else if (itemtype == TreeItemDir)
+        {
+            _right_btn_item = item;
+            menu.addAction(_action_hide_folder);
+            menu.addAction(_action_trash_folder);
+            menu.exec(QCursor::pos());
             _right_btn_item = nullptr;
         }
     }
@@ -892,6 +931,131 @@ QString ProTreeWidget::AlbumRootForPhoto(const QString &path) const
     return {};
 }
 
+bool ProTreeWidget::TrashPhoto(const QString &path, QString *error)
+{
+    return TrashPath(path, false, error);
+}
+
+bool ProTreeWidget::TrashFolder(const QString &path, QString *error)
+{
+    return TrashPath(path, true, error);
+}
+
+QStringList ProTreeWidget::FolderPhotoPaths(const QString &path) const
+{
+    QStringList paths;
+    const QString folder = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+    QTreeWidgetItemIterator it(const_cast<ProTreeWidget*>(this));
+    while (*it) {
+        auto *photo = dynamic_cast<ProTreeItem*>(*it);
+        if (photo && photo->type() == TreeItemPic
+            && MaterialInsideAlbum(QDir::cleanPath(QFileInfo(photo->GetPath()).absoluteFilePath()), folder))
+            paths.append(photo->GetPath());
+        ++it;
+    }
+    paths.removeDuplicates();
+    return paths;
+}
+
+void ProTreeWidget::HideFolder(const QString &path)
+{
+    _hidden_folder_paths.insert(MaterialCanonicalPath(path));
+    ApplyTreeFilter();
+}
+
+void ProTreeWidget::ShowHiddenFolders(const QString &albumRoot)
+{
+    const QString root = MaterialCanonicalPath(albumRoot);
+    for (auto it = _hidden_folder_paths.begin(); it != _hidden_folder_paths.end();) {
+        if (MaterialInsideAlbum(*it, root)) it = _hidden_folder_paths.erase(it);
+        else ++it;
+    }
+    _show_empty_material_roots.insert(root);
+    ApplyTreeFilter();
+}
+
+bool ProTreeWidget::TrashPath(const QString &path, bool folder, QString *error)
+{
+    if (error) error->clear();
+    const auto fail = [&](const QString &message) { if (error) *error = message; return false; };
+    if (_opening_projects || _thread_open_pro || _thread_create_pro
+        || (_slide_show_dlg && _slide_show_dlg->isVisible()))
+        return fail(tr("相册正在加载、导入或轮播，请结束后再删除。"));
+    const QString absolute = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+    if (folder) {
+        if (IsSystemProtectedDirectory(absolute)) return fail(tr("不能删除受保护目录。"));
+        const QString canonicalFolder = MaterialCanonicalPath(absolute);
+        for (int i = 0; i < topLevelItemCount(); ++i) {
+            auto *opened = dynamic_cast<ProTreeItem*>(topLevelItem(i));
+            if (!opened) continue;
+            const QString openedPath = MaterialCanonicalPath(opened->GetPath());
+            if (MaterialPathsEqual(openedPath, canonicalFolder) || MaterialInsideAlbum(openedPath, canonicalFolder))
+                return fail(tr("该目录本身或其子目录已作为独立相册打开，请先关闭对应相册。"));
+        }
+    }
+    QList<ProTreeItem*> targets;
+    QTreeWidgetItemIterator it(this);
+    while (*it) {
+        auto *photo = dynamic_cast<ProTreeItem*>(*it);
+        if (photo && photo->type() == (folder ? TreeItemDir : TreeItemPic)
+            && MaterialPathsEqual(QDir::cleanPath(QFileInfo(photo->GetPath()).absoluteFilePath()), absolute))
+            targets.append(photo);
+        ++it;
+    }
+    if (targets.isEmpty()) return fail(tr("图片已不在已打开的相册中，请刷新后重试。"));
+    auto *root = dynamic_cast<ProTreeItem*>(targets.first()->GetRoot());
+    if (!root) return fail(tr("无法确定图片所属相册。"));
+    const auto result = folder ? PhotoTrashService::moveFolderToTrash(path, root->GetPath())
+                               : PhotoTrashService::moveToTrash(path, root->GetPath());
+    if (!result.success) return fail(result.error);
+
+    // 回收站移动成功后才修改节点；鼠标菜单调用栈内只摘除，稍后释放。
+    const auto removed = [&targets](QTreeWidgetItem *item) {
+        for (; item; item = item->parent())
+            if (targets.contains(dynamic_cast<ProTreeItem*>(item))) return true;
+        return false;
+    };
+    const bool selectedRemoved = removed(_selecetd_item);
+    const bool currentRemoved = removed(currentItem());
+    ProTreeItem *replacement = nullptr;
+    if (selectedRemoved || currentRemoved) {
+        QList<ProTreeItem*> photos;
+        CollectPicItemsRecursive(root, photos);
+        for (auto *photo : photos) {
+            if (!removed(photo) && !photo->isHidden()) { replacement = photo; break; }
+        }
+    }
+    QSet<ProTreeItem*> roots;
+    {
+        const QSignalBlocker blocker(this);
+        if (removed(_right_btn_item)) _right_btn_item = nullptr;
+        if (removed(_active_item)) _active_item = nullptr;
+        for (auto *photo : targets) {
+            if (auto *owner = dynamic_cast<ProTreeItem*>(photo->GetRoot())) roots.insert(owner);
+            QList<ProTreeItem*> removedPhotos;
+            if (folder) CollectPicItemsRecursive(photo, removedPhotos);
+            else removedPhotos.append(photo);
+            for (auto *removedPhoto : removedPhotos) _favorite_paths.remove(removedPhoto->GetPath());
+            if (photo->parent()) photo->parent()->takeChild(photo->parent()->indexOfChild(photo));
+            QTimer::singleShot(0, [photo]() { delete photo; });
+        }
+        if (selectedRemoved) _selecetd_item = replacement;
+        if (currentRemoved) setCurrentItem(replacement ? static_cast<QTreeWidgetItem*>(replacement) : root);
+        for (auto *owner : roots) {
+            QList<ProTreeItem*> photos;
+            CollectPicItemsRecursive(owner, photos);
+            for (int i = 0; i < photos.size(); ++i) {
+                photos[i]->SetPreItem(i ? photos[i-1] : nullptr);
+                photos[i]->SetNextItem(i+1 < photos.size() ? photos[i+1] : nullptr);
+            }
+        }
+    }
+    if (selectedRemoved) emit SigUpdatePic(replacement ? replacement->GetPath() : QString());
+    ApplyTreeFilter();
+    SaveWorkspaceSettings();
+    return true;
+}
+
 bool ProTreeWidget::RegisterMaterial(const QString &albumRoot, const QString &savedPath,
                                     QString *registeredPath, QString *error)
 {
@@ -943,6 +1107,10 @@ bool ProTreeWidget::RegisterMaterial(const QString &albumRoot, const QString &sa
             break;
         }
     }
+    // 同一路径去重也要恢复显示，不能只在新建节点时恢复隐藏目录。
+    for (QString parentPath = QFileInfo(target).absolutePath(); MaterialInsideAlbum(parentPath, canonicalRoot);
+         parentPath = QFileInfo(parentPath).absolutePath())
+        _hidden_folder_paths.remove(MaterialCanonicalPath(parentPath));
     QList<ProTreeItem*> photos;
     CollectPicItemsRecursive(root, photos);
     for (auto *photo : photos) {
@@ -1028,6 +1196,27 @@ bool ProTreeWidget::SelectPhotoByPath(const QString &path)
 bool ProTreeWidget::FilterItemRecursive(QTreeWidgetItem *item)
 {
     if (!item) return false;
+
+    if (item->type() == TreeItemDir) {
+        auto *directory = static_cast<ProTreeItem*>(item);
+        const QString path = MaterialCanonicalPath(directory->GetPath());
+        const auto *root = static_cast<ProTreeItem*>(directory->GetRoot());
+        const QFileInfo info(directory->GetPath());
+        const bool emptyMaterial = info.fileName() == tr("素材") && info.isDir()
+            && !info.isSymLink() && !info.isShortcut()
+            && QDir(info.absoluteFilePath()).isReadable()
+            && !_show_empty_material_roots.contains(MaterialCanonicalPath(root->GetPath()))
+            && QDir(info.absoluteFilePath()).isEmpty(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System);
+        if (_hidden_folder_paths.contains(path) || emptyMaterial) {
+            // 子图片也显式隐藏，照片墙及前后导航共用同一可见性。
+            const auto hide = [](auto &&self, QTreeWidgetItem *node) -> void {
+                node->setHidden(true);
+                for (int i = 0; i < node->childCount(); ++i) self(self, node->child(i));
+            };
+            hide(hide, item);
+            return false;
+        }
+    }
 
     if (item->type() == TreeItemPic)
     {

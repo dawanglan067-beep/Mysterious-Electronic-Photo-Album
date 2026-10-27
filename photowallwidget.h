@@ -18,12 +18,14 @@ public:
 signals:
     void SigOpenPhoto(const QString &path);
     void SigExportRequested();
+    void SigDeletePhotosRequested(const QStringList &paths);
 private:
     void UpdateSelectionLabel();
     PhotoWallModel *_model;
     QListView *_view;
     QLabel *_count;
     QPushButton *_export;
+    QPushButton *_delete;
 };
 
 #endif

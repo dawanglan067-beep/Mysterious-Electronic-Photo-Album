@@ -45,6 +45,7 @@ qt_add_executable(Album
     imageprocessor.h imageprocessor.cpp
     imageexportservice.h imageexportservice.cpp
     materialsavedialog.h materialsavedialog.cpp
+    phototrashservice.h phototrashservice.cpp
     musiccontroller.h musiccontroller.cpp
     musicsettingsdialog.h musicsettingsdialog.cpp
     audiofileprobe.h audiofileprobe.cpp
@@ -129,6 +130,8 @@ if(ALBUM_BUILD_FEATURE_TESTS)
     list(REMOVE_ITEM _album_test_sources main.cpp protreewidget.cpp)
     list(FILTER _album_test_sources EXCLUDE REGEX "\\$<")
     # Tests must never read/write the user's real album or music preferences.
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/protreewidget.cpp")
     file(READ "${CMAKE_CURRENT_SOURCE_DIR}/protreewidget.cpp" _album_test_tree)
     string(REPLACE "AlbumStudio" "AlbumFeatureTests" _album_test_tree "${_album_test_tree}")
     file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/feature_test_tree.cpp" "${_album_test_tree}")

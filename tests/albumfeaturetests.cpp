@@ -13,8 +13,13 @@
 #include "imageprocessor.h"
 #include "imageexportservice.h"
 #include "materialsavedialog.h"
+#include "phototrashservice.h"
+#ifdef Q_OS_WIN
+#include <QtCore/qt_windows.h>
+#endif
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QFileDialog>
 #include "duplicatephotofinder.h"
 #include "workspacesettings.h"
 #include "musiccontroller.h"
@@ -90,6 +95,352 @@ int main(int argc, char **argv)
     check(temporary.isValid(), "temporary test directory");
     const QString outputDir = app.arguments().size() > 1 ? app.arguments().at(1) : temporary.path();
     QDir().mkpath(outputDir);
+    {
+        const QString album = temporary.filePath("trash-album");
+        QDir().mkpath(album);
+        QImage fixture(80,60,QImage::Format_RGB32); fixture.fill(Qt::cyan);
+        const QString outside = temporary.filePath("trash-external.png"); fixture.save(outside);
+        const QByteArray externalBytes = readFile(outside);
+        const QString direct = album + "/direct.png"; fixture.save(direct);
+        const auto bytes = readFile(direct);
+        const auto trashed = PhotoTrashService::moveToTrash(direct,album);
+        check(trashed.success && !QFileInfo::exists(direct), "real recycling moves fixture out of album");
+        if (!trashed.trashPath.isEmpty()) {
+            check(readFile(trashed.trashPath) == bytes, "recycle bin retains original file bytes");
+        }
+        check(!PhotoTrashService::moveToTrash(outside,album).success && readFile(outside) == externalBytes,
+              "recycling rejects external file without modifying it");
+        check(!PhotoTrashService::moveToTrash(album,album).success,
+              "single photo deletion cannot recycle an album directory");
+        const QString link = album + "/external-link.png";
+        const bool linked = QFile::link(outside,link);
+        if (linked) {
+            const QFileInfo linkInfo(link);
+            const auto linkResult = PhotoTrashService::moveToTrash(link,album);
+            if (linkInfo.isSymLink() || linkInfo.isShortcut())
+                check(!linkResult.success && QFileInfo::exists(outside), "recycling rejects link to external file");
+            else
+                check(linkResult.success && readFile(outside) == externalBytes,
+                      "recycling album hard link preserves external file and bytes");
+        }
+#ifdef Q_OS_WIN
+        const QString symlink = album + "/outside-symlink.png";
+        if (CreateSymbolicLinkW(reinterpret_cast<LPCWSTR>(symlink.utf16()),
+                               reinterpret_cast<LPCWSTR>(outside.utf16()), 0x2)) {
+            check(!PhotoTrashService::moveToTrash(symlink,album).success && readFile(outside) == externalBytes,
+                  "Windows symbolic link cannot delete external image");
+            DeleteFileW(reinterpret_cast<LPCWSTR>(symlink.utf16()));
+        }
+#endif
+        check(!PhotoTrashService::moveToTrash(album + "/missing.png",album).success,
+              "missing file reports recycle failure");
+
+        QSettings isolated("AlbumFeatureTests","AlbumApp"); isolated.clear();
+        MainWindow window; window.resize(1280,800); window.show();
+        auto *tree = window.findChild<ProTreeWidget*>();
+        auto *wall = window.findChild<PhotoWallWidget*>();
+        auto *view = wall->findChild<QListView*>();
+        auto *editor = window.findChild<PicShow*>();
+        auto *root = new ProTreeItem(tree,"trash album",album,TreeItemPro);
+        tree->setCurrentItem(root);
+        QString first, second, error;
+        check(tree->RegisterMaterial(album,outside,&first,&error), "create album copy to recycle");
+        const QString local = album + "/keep.png"; fixture.save(local);
+        check(tree->RegisterMaterial(album,local,&second,&error), "register second recycle fixture");
+        tree->SelectPhotoByPath(first); app.processEvents();
+        auto *history = editor->findChild<QUndoStack*>();
+        auto *slider = editor->findChildren<QSlider*>().first(); slider->setValue(25);
+        const auto edited = editor->findChild<QLabel*>("label")->grab().toImage();
+        const int historyIndex = history->index();
+        auto *deleteButton = wall->findChild<QPushButton*>("photoWallDeleteButton");
+        check(deleteButton && !deleteButton->isEnabled(), "wall delete disabled without selection");
+        view->selectionModel()->select(view->model()->index(0,0), QItemSelectionModel::Select);
+        check(deleteButton->isEnabled(), "wall delete enabled for selected material");
+        const auto requestDeletion = [&](const QStringList &paths, bool confirm, bool discard,
+                                         bool exportFirst = false, const QString &exportPath = QString()) {
+            QTimer automation;
+            QObject::connect(&automation,&QTimer::timeout,&window,[&]() {
+                if (auto *dialog = qobject_cast<QFileDialog*>(QApplication::activeModalWidget())) {
+                    if (exportPath.isEmpty()) dialog->reject();
+                    else {
+                        dialog->setOption(QFileDialog::DontConfirmOverwrite);
+                        dialog->selectFile(exportPath);
+                        QMetaObject::invokeMethod(dialog,"accept",Qt::DirectConnection);
+                    }
+                } else if (auto *prompt = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) {
+                    if (prompt->objectName() == "photoTrashConfirmation") {
+                        check(prompt->detailedText().contains(paths.first()), "delete confirmation identifies actual file path");
+                        prompt->button(confirm ? QMessageBox::Yes : QMessageBox::Cancel)->click();
+                    } else if (prompt->objectName() == "photoDeleteEditPrompt") {
+                        if (exportFirst) {
+                            auto *button = prompt->findChild<QPushButton*>("deleteExportButton");
+                            button->click();
+                        } else if (discard) prompt->findChild<QPushButton*>("deleteDiscardButton")->click();
+                        else prompt->button(QMessageBox::Cancel)->click();
+                    } else prompt->accept();
+                }
+            });
+            automation.start(10);
+            QMetaObject::invokeMethod(wall,"SigDeletePhotosRequested",Qt::DirectConnection,Q_ARG(QStringList,paths));
+            app.processEvents();
+        };
+        requestDeletion({first},false,false);
+        requestDeletion({first},true,false);
+        check(QFileInfo::exists(first) && tree->VisiblePhotos(album).size() == 2
+              && history->index() == historyIndex && editor->isModified()
+              && editor->findChild<QLabel*>("label")->grab().toImage() == edited,
+              "confirmation and dirty-edit cancellation preserve file nodes preview and history");
+        // Use Qt's dialog for automated export cancellation; the native picker is manual acceptance.
+        QApplication::setAttribute(Qt::AA_DontUseNativeDialogs,true);
+        requestDeletion({first},true,false,true);
+        QApplication::setAttribute(Qt::AA_DontUseNativeDialogs,false);
+        check(QFileInfo::exists(first) && editor->isModified() && history->index() == historyIndex,
+              "cancel export-before-delete cancels deletion and preserves edits");
+#ifdef Q_OS_WIN
+        const HANDLE locked = CreateFileW(reinterpret_cast<LPCWSTR>(first.utf16()), GENERIC_READ,
+            FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        check(locked != INVALID_HANDLE_VALUE, "lock fixture against deletion");
+        if (locked != INVALID_HANDLE_VALUE) {
+            requestDeletion({first},true,true);
+            check(QFileInfo::exists(first) && tree->VisiblePhotos(album).size() == 2
+                  && editor->isModified() && history->index() == historyIndex,
+                  "recycle failure retains current edited photo and tree node");
+            CloseHandle(locked);
+        }
+#endif
+        const QString fakePath = temporary.filePath("not-in-tree.png"); fixture.save(fakePath);
+        QApplication::setAttribute(Qt::AA_DontUseNativeDialogs,true);
+        requestDeletion({first,fakePath},true,false,true,fakePath);
+        check(QFileInfo::exists(first) && readFile(fakePath) == externalBytes && editor->isModified(),
+              "export-before-delete rejects another file in deletion batch");
+        const QString rescued = temporary.filePath("edited-copy-before-delete.png");
+        requestDeletion({first,fakePath},true,false,true,rescued);
+        QApplication::setAttribute(Qt::AA_DontUseNativeDialogs,false);
+        ImageProcessor::Parameters savedParams; savedParams.brightness = 25;
+        check(QImage(rescued) == ImageProcessor::Apply(fixture,savedParams),
+              "export-before-delete preserves full edited pixels in separate copy");
+        check(!QFileInfo::exists(first) && readFile(outside) == externalBytes
+              && QFileInfo::exists(fakePath) && tree->VisiblePhotos(album).size() == 1,
+              "batch partial failure removes only album copy and preserves external files");
+        check(view->model()->rowCount() == 1 && editor->IsEditingPath(second) && !editor->isModified()
+              && history->count() == 0, "deleting edited photo updates viewer history and integrated wall");
+        auto *emptyMaterialFolder = root->child(0);
+        check(emptyMaterialFolder && emptyMaterialFolder->type() == TreeItemDir && emptyMaterialFolder->isHidden()
+              && QDir(QFileInfo(first).absolutePath()).exists() && QDir(QFileInfo(first).absolutePath()).isEmpty(),
+              "last material deletion automatically hides real empty folder without deleting directory");
+        auto *remaining = root->GetFirstPicChild();
+        check(remaining && !remaining->GetPreItem() && !remaining->GetNextItem(), "deletion repairs photo navigation links");
+        tree->SlotNextShow(); tree->SlotPreShow();
+        check(editor->IsEditingPath(second), "navigation remains valid after deleting neighbor");
+        root->setExpanded(true); app.processEvents();
+        bool treeDeleteTriggered = false;
+        QTimer treeAutomation;
+        QTimer treeConfirmAutomation;
+        QObject::connect(&treeConfirmAutomation,&QTimer::timeout,&window,[&]() {
+            if (auto *prompt = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) {
+                check(prompt->grab().save(outputDir + "/material-delete-confirmation.png"), "delete confirmation screenshot");
+                prompt->button(QMessageBox::Yes)->click();
+            }
+        });
+        treeConfirmAutomation.start(10);
+        QObject::connect(&treeAutomation,&QTimer::timeout,&window,[&]() {
+            for (auto *widget : QApplication::topLevelWidgets()) {
+                auto *menu = qobject_cast<QMenu*>(widget);
+                if (!menu || !menu->isVisible() || treeDeleteTriggered) continue;
+                for (auto *action : menu->actions()) {
+                    if (action->objectName() == "treeTrashPhotoAction") {
+                        treeDeleteTriggered = true;
+                        action->trigger();
+                        menu->close();
+                        return;
+                    }
+                }
+            }
+        });
+        treeAutomation.start(10);
+        QTimer treeWatchdog;
+        treeWatchdog.setSingleShot(true);
+        QObject::connect(&treeWatchdog,&QTimer::timeout,&window,[]() {
+            if (auto *dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget())) dialog->reject();
+            if (auto *menu = qobject_cast<QMenu*>(QApplication::activePopupWidget())) menu->close();
+        });
+        treeWatchdog.start(5000);
+        tree->scrollToItem(remaining); app.processEvents();
+        QTest::mousePress(tree->viewport(),Qt::RightButton,Qt::NoModifier,tree->visualItemRect(remaining).center());
+        QTest::mouseRelease(tree->viewport(),Qt::RightButton,Qt::NoModifier,tree->visualItemRect(remaining).center());
+        treeAutomation.stop(); treeConfirmAutomation.stop(); treeWatchdog.stop();
+        app.processEvents();
+        check(treeDeleteTriggered && !QFileInfo::exists(second) && view->model()->rowCount() == 0 && !editor->isModified()
+              && !editor->findChild<QPushButton*>("photoCompareButton")->isEnabled(),
+              "deleting last photo clears editor and wall without dangling selection");
+        tree->clear(); tree->SlotOpenPro(album); app.processEvents();
+        check(tree->VisiblePhotos(album).isEmpty() && view->model()->rowCount() == 0,
+              "deleted materials do not return when album is reopened");
+        isolated.clear();
+    }
+    {
+        QSettings isolated("AlbumFeatureTests","AlbumApp"); isolated.clear();
+        const QString album = temporary.filePath("folder-management-album"); QDir().mkpath(album);
+        const QString outside = temporary.filePath("folder-external.png");
+        QImage fixture(64,48,QImage::Format_RGB32); fixture.fill(Qt::green); fixture.save(outside);
+        const auto originalBytes = readFile(outside);
+        check(!PhotoTrashService::moveFolderToTrash(album,album).success
+              && !PhotoTrashService::moveFolderToTrash(temporary.path(),album).success,
+              "folder recycling rejects album root and external directory");
+        MainWindow window; window.resize(1280,800); window.show();
+        auto *tree = window.findChild<ProTreeWidget*>();
+        auto *wall = window.findChild<PhotoWallWidget*>();
+        auto *view = wall->findChild<QListView*>();
+        auto *editor = window.findChild<PicShow*>();
+        auto *root = new ProTreeItem(tree,"folder album",album,TreeItemPro);
+        tree->setCurrentItem(root);
+        QString material, error;
+        check(tree->RegisterMaterial(album,outside,&material,&error), "register managed-folder fixture");
+        const QString folderPath = QFileInfo(material).absolutePath();
+        auto *folder = root->child(0);
+        QFile notes(folderPath + "/.notes.txt"); notes.open(QIODevice::WriteOnly); notes.write("keep non-image data"); notes.close();
+#ifdef Q_OS_WIN
+        SetFileAttributesW(reinterpret_cast<LPCWSTR>(notes.fileName().utf16()), FILE_ATTRIBUTE_HIDDEN);
+#endif
+        check(tree->TrashPhoto(material,&error) && !folder->isHidden() && QFileInfo::exists(notes.fileName()),
+              "non-image and hidden files prevent empty material directory classification");
+        check(tree->RegisterMaterial(album,outside,&material,&error), "register material again in retained directory");
+        tree->SelectPhotoByPath(material); app.processEvents();
+        auto *history = editor->findChild<QUndoStack*>();
+        editor->findChildren<QSlider*>().first()->setValue(25);
+        const int originalHistory = history->index();
+        const auto originalPreview = editor->findChild<QLabel*>("label")->grab().toImage();
+
+        const auto triggerMenu = [&](QTreeWidgetItem *item, const QString &actionName) {
+            bool triggered = false;
+            QTimer automation;
+            QObject::connect(&automation,&QTimer::timeout,&window,[&]() {
+                for (auto *widget : QApplication::topLevelWidgets()) {
+                    auto *menu = qobject_cast<QMenu*>(widget);
+                    if (!menu || !menu->isVisible() || triggered) continue;
+                    for (auto *action : menu->actions()) if (action->objectName() == actionName) {
+                        triggered = true;
+                        if (actionName == "treeHideFolderAction")
+                            check(menu->grab().save(outputDir + "/material-folder-menu.png"), "folder context-menu screenshot");
+                        action->trigger(); menu->close(); return;
+                    }
+                }
+            });
+            automation.start(10);
+            QTimer watchdog;
+            watchdog.setSingleShot(true);
+            QObject::connect(&watchdog,&QTimer::timeout,&window,[]() {
+                if (auto *dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget())) dialog->reject();
+                if (auto *menu = qobject_cast<QMenu*>(QApplication::activePopupWidget())) menu->close();
+            });
+            watchdog.start(5000);
+            root->setExpanded(true); tree->scrollToItem(item); app.processEvents();
+            QTest::mousePress(tree->viewport(),Qt::RightButton,Qt::NoModifier,tree->visualItemRect(item).center());
+            QTest::mouseRelease(tree->viewport(),Qt::RightButton,Qt::NoModifier,tree->visualItemRect(item).center());
+            automation.stop(); watchdog.stop(); app.processEvents();
+            check(triggered, "folder management action available through actual right-click menu");
+        };
+        triggerMenu(folder,"treeHideFolderAction");
+        check(folder->isHidden() && view->model()->rowCount() == 0 && QFileInfo::exists(material)
+              && editor->isModified() && history->index() == originalHistory,
+              "hide folder preserves disk and dirty editor and removes wall photos");
+        tree->SlotSearchTextChanged("png"); tree->SlotSearchTextChanged("");
+        check(folder->isHidden(), "manual folder hiding survives search changes");
+        const bool registeredAgain = tree->RegisterMaterial(album,outside,&material,&error);
+        app.processEvents(); // 照片墙通过排队连接接收集合变更。
+        check(registeredAgain && !folder->isHidden()
+              && view->model()->rowCount() == 1 && history->index() == originalHistory,
+              "registering existing material unhides directory without duplicating or discarding edits");
+        tree->HideFolder(folderPath);
+        triggerMenu(root,"treeShowFoldersAction");
+        check(!folder->isHidden() && view->model()->rowCount() == 1 && editor->isModified(),
+              "album menu restores hidden directory and photos without closing album");
+        auto *alsoOpened = new ProTreeItem(tree,"separately opened folder",folderPath,TreeItemPro);
+        check(!tree->TrashFolder(folderPath,&error) && QFileInfo::exists(material),
+              "folder recycling requires closing independently opened overlapping album first");
+        delete tree->takeTopLevelItem(tree->indexOfTopLevelItem(alsoOpened));
+#ifdef Q_OS_WIN
+        const QString alias = folderPath + "/external-alias.png";
+        if (CreateSymbolicLinkW(reinterpret_cast<LPCWSTR>(alias.utf16()),
+                               reinterpret_cast<LPCWSTR>(outside.utf16()),0x2)) {
+            check(!PhotoTrashService::moveFolderToTrash(folderPath,album).success
+                  && QFileInfo::exists(material) && readFile(outside) == originalBytes,
+                  "folder containing external alias is rejected without touching files");
+            DeleteFileW(reinterpret_cast<LPCWSTR>(alias.utf16()));
+        }
+#endif
+
+        bool confirm = false, discard = false, exportFirst = false;
+        QString exportPath;
+        QTimer prompts;
+        QObject::connect(&prompts,&QTimer::timeout,&window,[&]() {
+            if (auto *dialog = qobject_cast<QFileDialog*>(QApplication::activeModalWidget())) {
+                dialog->setOption(QFileDialog::DontConfirmOverwrite);
+                dialog->selectFile(exportPath);
+                QMetaObject::invokeMethod(dialog,"accept",Qt::DirectConnection);
+            } else if (auto *prompt = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) {
+                if (prompt->objectName() == "folderTrashConfirmation") {
+                    check(prompt->informativeText().contains(QDir::toNativeSeparators(folderPath))
+                          && prompt->text().contains(QStringLiteral("非图片")), "folder confirmation includes path and all-file warning");
+                    check(prompt->grab().save(outputDir + "/material-folder-delete-confirmation.png"), "folder deletion confirmation screenshot");
+                    prompt->button(confirm ? QMessageBox::Yes : QMessageBox::Cancel)->click();
+                } else if (prompt->objectName() == "photoDeleteEditPrompt") {
+                    if (exportFirst) prompt->findChild<QPushButton*>("deleteExportButton")->click();
+                    else if (discard) prompt->findChild<QPushButton*>("deleteDiscardButton")->click();
+                    else prompt->button(QMessageBox::Cancel)->click();
+                } else prompt->accept();
+            }
+        });
+        prompts.start(10);
+        triggerMenu(folder,"treeTrashFolderAction");
+        confirm = true;
+        QMetaObject::invokeMethod(tree,"SigDeleteFolderRequested",Qt::DirectConnection,Q_ARG(QString,folderPath));
+        check(QFileInfo::exists(material) && editor->isModified() && history->index() == originalHistory
+              && editor->findChild<QLabel*>("label")->grab().toImage() == originalPreview,
+              "cancel folder confirmation or dirty prompt preserves directory and editor");
+#ifdef Q_OS_WIN
+        const HANDLE locked = CreateFileW(reinterpret_cast<LPCWSTR>(material.utf16()), GENERIC_READ,
+            FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+        check(locked != INVALID_HANDLE_VALUE, "lock folder child against recycling");
+        if (locked != INVALID_HANDLE_VALUE) {
+            discard = true;
+            QMetaObject::invokeMethod(tree,"SigDeleteFolderRequested",Qt::DirectConnection,Q_ARG(QString,folderPath));
+            check(QFileInfo::exists(material) && QFileInfo::exists(notes.fileName()) && root->childCount() == 1
+                  && history->index() == originalHistory && editor->isModified(),
+                  "folder recycle failure preserves subtree non-image file and edited history");
+            CloseHandle(locked);
+        }
+#endif
+        QApplication::setAttribute(Qt::AA_DontUseNativeDialogs,true);
+        exportFirst = true; exportPath = folderPath + "/unsafe-rescue.png";
+        QMetaObject::invokeMethod(tree,"SigDeleteFolderRequested",Qt::DirectConnection,Q_ARG(QString,folderPath));
+        check(QFileInfo::exists(material) && !QFileInfo::exists(exportPath) && editor->isModified(),
+              "rescue export cannot be written inside directory being recycled");
+        exportPath = temporary.filePath("safe-folder-rescue.png");
+        QMetaObject::invokeMethod(tree,"SigDeleteFolderRequested",Qt::DirectConnection,Q_ARG(QString,folderPath));
+        QApplication::setAttribute(Qt::AA_DontUseNativeDialogs,false);
+        prompts.stop(); app.processEvents();
+        ImageProcessor::Parameters parameters; parameters.brightness = 25;
+        check(!QFileInfo::exists(folderPath) && root->childCount() == 0 && view->model()->rowCount() == 0
+              && history->count() == 0 && !editor->isModified() && readFile(outside) == originalBytes
+              && QImage(exportPath) == ImageProcessor::Apply(fixture,parameters),
+              "folder recycle removes entire subtree preserves external source and exports edited rescue");
+        tree->clear(); tree->SlotOpenPro(album); app.processEvents();
+        check(tree->topLevelItemCount() == 1 && tree->topLevelItem(0)->childCount() == 0,
+              "reopening album does not recreate recycled material folder");
+        check(tree->RegisterMaterial(album,outside,&material,&error) && QFileInfo::exists(material)
+              && !tree->topLevelItem(0)->child(0)->isHidden(),
+              "saving another material recreates directory and visible tree node");
+        auto *reopenedRoot = tree->topLevelItem(0);
+        tree->HideFolder(folderPath);
+        tree->ShowHiddenFolders(album);
+        check(tree->TrashPhoto(material,&error) && !reopenedRoot->child(0)->isHidden(),
+              "explicit show-empty choice keeps empty material folder accessible for management");
+        check(tree->TrashFolder(folderPath,&error) && !QFileInfo::exists(folderPath)
+              && reopenedRoot->childCount() == 0,
+              "empty material folder can be recycled independently of parent album");
+        isolated.clear();
+    }
     {
         const QString album = temporary.filePath("material-album");
         QDir().mkpath(album);

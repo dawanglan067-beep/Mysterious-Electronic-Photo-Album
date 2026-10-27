@@ -28,6 +28,8 @@ public:
     void ReloadPic();
     bool isModified() const { return _document.isModified(); }
     void SetMaterialAlbumRoot(const QString &path) { _material_album_root = path; }
+    bool IsEditingPath(const QString &path) const;
+    bool ConfirmDeletionOfEditedPhoto(const QStringList &deletionPaths = {});
 
     // 清空当前图片数据并重绘清空展示区
     void Clear();
@@ -58,6 +60,7 @@ private:
     void ResetViewFit();
     void SyncControlsFromDocument();
     void SetOriginalComparison(bool enabled);
+    bool ExportProcessedImage(const QStringList &protectedPaths = {});
     bool _show_original = false;
     QPushButton *_compare_button = nullptr;
     QPushButton *_restore_original_button = nullptr;

@@ -17,6 +17,8 @@ PhotoWallWidget::PhotoWallWidget(QWidget *parent) : QWidget(parent)
     auto *selectAll = new QPushButton(QIcon(":/icon/line/album.svg"), tr("全选"), this);
     auto *clear = new QPushButton(tr("取消选择"), this);
     _export = new QPushButton(QIcon(":/icon/line/save.svg"), tr("导出 PDF 相册"), this);
+    _delete = new QPushButton(QIcon(":/icon/line/remove.svg"), tr("删除所选（回收站）"), this);
+    _delete->setObjectName("photoWallDeleteButton");
     auto *size = new QSlider(Qt::Horizontal, this);
     size->setObjectName("thumbnailSize");
     size->setRange(96, 256);
@@ -28,6 +30,7 @@ PhotoWallWidget::PhotoWallWidget(QWidget *parent) : QWidget(parent)
     toolbar->addWidget(new QLabel(tr("缩略图"), this));
     toolbar->addWidget(size);
     toolbar->addWidget(_export);
+    toolbar->addWidget(_delete);
     layout->addLayout(toolbar);
     _model = new PhotoWallModel(this);
     _view = new QListView(this);
@@ -56,6 +59,10 @@ PhotoWallWidget::PhotoWallWidget(QWidget *parent) : QWidget(parent)
         emit SigOpenPhoto(_model->PathAt(index.row()));
     });
     connect(_export, &QPushButton::clicked, this, &PhotoWallWidget::SigExportRequested);
+    connect(_delete, &QPushButton::clicked, this, [this]() {
+        const QStringList paths = SelectedPaths();
+        if (!paths.isEmpty()) emit SigDeletePhotosRequested(paths);
+    });
     UpdateSelectionLabel();
 }
 
@@ -90,4 +97,5 @@ void PhotoWallWidget::UpdateSelectionLabel()
     _count->setText(_model->rowCount() == 0 ? tr("当前相册没有符合筛选条件的照片，请打开或导入相册。")
         : tr("共 %1 张，已选 %2 张 · Ctrl 多选，Shift 连选，双击查看").arg(_model->rowCount()).arg(count));
     _export->setEnabled(count > 0);
+    _delete->setEnabled(count > 0);
 }

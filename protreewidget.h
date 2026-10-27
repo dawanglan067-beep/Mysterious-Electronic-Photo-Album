@@ -20,6 +20,11 @@ public:
     QList<PhotoEntry> VisiblePhotos(const QString &albumRootPath) const;
     bool SelectPhotoByPath(const QString &path);
     QString AlbumRootForPhoto(const QString &path) const;
+    bool TrashPhoto(const QString &path, QString *error = nullptr);
+    bool TrashFolder(const QString &path, QString *error = nullptr);
+    QStringList FolderPhotoPaths(const QString &path) const;
+    void HideFolder(const QString &path);
+    void ShowHiddenFolders(const QString &albumRoot);
     bool RegisterMaterial(const QString &albumRoot, const QString &savedPath,
                           QString *registeredPath, QString *error);
 private:
@@ -47,6 +52,13 @@ private:
     bool _only_favorites;                     // 是否仅显示星标收藏图片
     QAction *_action_detect_dup;              // 右键菜单：dHash 相似/重复照片检测
     QAction *_action_toggle_fav;              // 图片节点右键菜单：收藏/取消收藏
+    QAction *_action_trash_photo = nullptr;
+    QAction *_action_hide_folder = nullptr;
+    QAction *_action_trash_folder = nullptr;
+    QAction *_action_show_folders = nullptr;
+    QSet<QString> _hidden_folder_paths;
+    QSet<QString> _show_empty_material_roots;
+    bool TrashPath(const QString &path, bool folder, QString *error);
 
     void ApplyTreeFilter();
     bool FilterItemRecursive(QTreeWidgetItem *item);
@@ -103,6 +115,8 @@ public slots:
 signals:
     void SigAlbumOpened(const QString &path);
     void SigPhotoSetChanged();
+    void SigDeletePhotosRequested(const QStringList &paths);
+    void SigDeleteFolderRequested(const QString &path);
     void SigCancelProgress();
     void SigCancelOpenProgress();
     void SigUpdateSelected(const QString &);
