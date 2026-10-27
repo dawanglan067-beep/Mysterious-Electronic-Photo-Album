@@ -158,10 +158,23 @@ MainWindow::MainWindow(QWidget *parent)
             QMessageBox::warning(this, tr("导出失败"), message);
     });
     auto *pro_pic_show=dynamic_cast<PicShow*>(_picshow);
-    connect(pro_tree_widget,&ProTreeWidget::SigUpdateSelected,pro_pic_show,&PicShow::SlotSelectItem);
+    const auto loadEditor = [pro_tree_widget, pro_pic_show](const QString &path) {
+        pro_pic_show->SlotSelectItem(path);
+        pro_pic_show->SetMaterialAlbumRoot(pro_tree_widget->AlbumRootForPhoto(path));
+    };
+    connect(pro_tree_widget, &ProTreeWidget::SigUpdateSelected, pro_pic_show, loadEditor);
     connect(pro_pic_show,&PicShow::SigNextClicked,pro_tree_widget,&ProTreeWidget::SlotNextShow);
     connect(pro_pic_show,&PicShow::SigPreClicked,pro_tree_widget,&ProTreeWidget::SlotPreShow);
-    connect(pro_tree_widget,&ProTreeWidget::SigUpdatePic,pro_pic_show,&PicShow::SlotUpdatePic);
+    connect(pro_tree_widget, &ProTreeWidget::SigUpdatePic, pro_pic_show, loadEditor);
+    connect(pro_pic_show, &PicShow::SigMaterialSaved, this,
+            [this, pro_tree_widget](const QString &path, const QString &albumRoot) {
+        QString registered, error;
+        if (pro_tree_widget->RegisterMaterial(albumRoot, path, &registered, &error))
+            QMessageBox::information(this, tr("素材已保存并加入相册"),
+                tr("保存位置：%1\n相册素材：%2").arg(path, registered));
+        else QMessageBox::warning(this, tr("素材已保存，加入相册失败"),
+                tr("文件已保存在：%1\n%2").arg(path, error));
+    });
     connect(act_music,&QAction::triggered,pro_tree_widget,&ProTreeWidget::SlotSetMusic);
     connect(act_select_music,&QAction::triggered,pro_tree_widget,&ProTreeWidget::SlotSelectMusicFile);
     connect(act_toggle_music,&QAction::triggered,pro_tree_widget,&ProTreeWidget::SlotToggleMusic);

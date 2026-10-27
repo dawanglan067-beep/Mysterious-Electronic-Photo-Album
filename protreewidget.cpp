@@ -20,11 +20,48 @@
 #include <QListWidget>
 #include <QMessageBox>
 #include <QFileInfo>
+#include <QFile>
+#include <QImageReader>
+#include <QCryptographicHash>
 #include <QStandardPaths>
 #include "removeprodialog.h"
 #include "slideshowdlg.h"
 
 namespace {
+
+QString MaterialCanonicalPath(const QString &path)
+{
+    const QFileInfo info(path);
+    const QString canonical = info.canonicalFilePath();
+    return QDir::cleanPath(canonical.isEmpty() ? info.absoluteFilePath() : canonical);
+}
+
+bool MaterialPathsEqual(const QString &a, const QString &b)
+{
+#ifdef Q_OS_WIN
+    return a.compare(b, Qt::CaseInsensitive) == 0;
+#else
+    return a == b;
+#endif
+}
+
+bool MaterialInsideAlbum(const QString &path, const QString &root)
+{
+    const QString prefix = root.endsWith('/') ? root : root + '/';
+#ifdef Q_OS_WIN
+    return path.startsWith(prefix, Qt::CaseInsensitive);
+#else
+    return path.startsWith(prefix);
+#endif
+}
+
+QByteArray MaterialFileHash(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) return {};
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    return hash.addData(&file) ? hash.result() : QByteArray();
+}
 
 // 检查给定的绝对路径是否属于操作系统受保护的系统级目录或用户核心个人资料库（坚决拦截本地物理删除）
 bool IsSystemProtectedDirectory(const QString &rawPath)
@@ -836,6 +873,121 @@ QString ProTreeWidget::CurrentAlbumRootPath() const
     while (item && item->parent()) item = item->parent();
     auto *root = dynamic_cast<ProTreeItem*>(item);
     return root ? root->GetPath() : QString();
+}
+
+QString ProTreeWidget::AlbumRootForPhoto(const QString &path) const
+{
+    if (path.isEmpty()) return {};
+    const QString normalized = MaterialCanonicalPath(path);
+    QTreeWidgetItemIterator it(const_cast<ProTreeWidget*>(this));
+    while (*it) {
+        auto *photo = dynamic_cast<ProTreeItem*>(*it);
+        if (photo && photo->type() == TreeItemPic
+            && MaterialPathsEqual(MaterialCanonicalPath(photo->GetPath()), normalized)) {
+            auto *root = dynamic_cast<ProTreeItem*>(photo->GetRoot());
+            return root ? root->GetPath() : QString();
+        }
+        ++it;
+    }
+    return {};
+}
+
+bool ProTreeWidget::RegisterMaterial(const QString &albumRoot, const QString &savedPath,
+                                    QString *registeredPath, QString *error)
+{
+    if (registeredPath) registeredPath->clear();
+    if (error) error->clear();
+    const auto fail = [&](const QString &message) { if (error) *error = message; return false; };
+    if (_opening_projects || _thread_create_pro || _thread_open_pro)
+        return fail(tr("相册正在加载或导入，请完成后再加入素材。"));
+    if (albumRoot.isEmpty() || !QFileInfo(albumRoot).isDir())
+        return fail(tr("目标相册目录不存在。"));
+    const QString canonicalRoot = MaterialCanonicalPath(albumRoot);
+    ProTreeItem *root = nullptr;
+    for (int i = 0; i < topLevelItemCount(); ++i) {
+        auto *item = dynamic_cast<ProTreeItem*>(topLevelItem(i));
+        if (item && MaterialPathsEqual(MaterialCanonicalPath(item->GetPath()), canonicalRoot)) {
+            root = item;
+            break;
+        }
+    }
+    if (!root) return fail(tr("目标相册已经关闭，请重新打开后加入素材。"));
+    QImageReader reader(savedPath);
+    if (!QFileInfo(savedPath).isFile() || !reader.canRead())
+        return fail(tr("保存的素材不存在或不是可读取的图片。"));
+    QString target = MaterialCanonicalPath(savedPath);
+    if (!MaterialInsideAlbum(target, canonicalRoot)) {
+        const QString folder = QDir(root->GetPath()).filePath(tr("素材"));
+        if (!QDir().mkpath(folder) || !MaterialInsideAlbum(MaterialCanonicalPath(folder), canonicalRoot))
+            return fail(tr("无法在当前相册内创建素材目录。"));
+        const QFileInfo source(savedPath);
+        const QByteArray sourceHash = MaterialFileHash(savedPath);
+        if (sourceHash.isEmpty()) return fail(tr("无法读取素材文件。"));
+        for (int number = 0; ; ++number) {
+            const QString name = source.completeBaseName()
+                + (number ? QString("_%1").arg(number, 3, 10, QLatin1Char('0')) : QString())
+                + "." + source.suffix();
+            const QString candidate = QDir(folder).filePath(name);
+            if (QFileInfo::exists(candidate)) {
+                // 相同素材再次登记复用原副本，不覆盖不同内容的同名文件。
+                if (!QFileInfo(candidate).isSymLink() && QFileInfo(candidate).isFile()
+                    && MaterialInsideAlbum(MaterialCanonicalPath(candidate), canonicalRoot)
+                    && MaterialFileHash(candidate) == sourceHash) {
+                    target = MaterialCanonicalPath(candidate);
+                    break;
+                }
+                continue;
+            }
+            if (!QFile::copy(savedPath, candidate)) return fail(tr("素材已保存，但无法复制到相册目录。"));
+            target = MaterialCanonicalPath(candidate);
+            break;
+        }
+    }
+    QList<ProTreeItem*> photos;
+    CollectPicItemsRecursive(root, photos);
+    for (auto *photo : photos) {
+        if (MaterialPathsEqual(MaterialCanonicalPath(photo->GetPath()), target)) {
+            if (registeredPath) *registeredPath = photo->GetPath();
+            ApplyTreeFilter(); // 同路径文件也可能被重新保存，需要刷新缩略图。
+            return true;
+        }
+    }
+    const QString relative = QDir(canonicalRoot).relativeFilePath(target);
+    const auto components = relative.split('/', Qt::SkipEmptyParts);
+    QTreeWidgetItem *parent = root;
+    QString directory = root->GetPath();
+    for (int i = 0; i + 1 < components.size(); ++i) {
+        directory = QDir(directory).filePath(components[i]);
+        QTreeWidgetItem *found = nullptr;
+        for (int j = 0; j < parent->childCount(); ++j) {
+            auto *child = dynamic_cast<ProTreeItem*>(parent->child(j));
+            if (child && child->type() == TreeItemDir
+                && MaterialPathsEqual(MaterialCanonicalPath(child->GetPath()), MaterialCanonicalPath(directory))) {
+                found = child;
+                break;
+            }
+        }
+        if (!found) {
+            found = new ProTreeItem(parent, components[i], directory, root, TreeItemDir);
+            found->setText(0, components[i]);
+            found->setIcon(0, QIcon(":/icon/line/dir.svg"));
+        }
+        parent = found;
+    }
+    const QString nodePath = QDir(directory).filePath(components.last());
+    auto *photo = new ProTreeItem(parent, components.last(), nodePath, root, TreeItemPic);
+    photo->setIcon(0, QIcon(":/icon/line/core.svg"));
+    photos.clear();
+    CollectPicItemsRecursive(root, photos);
+    for (int i = 0; i < photos.size(); ++i) {
+        photos[i]->SetPreItem(i ? photos[i-1] : nullptr);
+        photos[i]->SetNextItem(i+1 < photos.size() ? photos[i+1] : nullptr);
+    }
+    RefreshItemFavoriteDisplay(root);
+    ApplyTreeFilter();
+    SaveWorkspaceSettings();
+    if (registeredPath) *registeredPath = nodePath;
+    return true;
 }
 
 QList<PhotoEntry> ProTreeWidget::VisiblePhotos(const QString &albumRootPath) const

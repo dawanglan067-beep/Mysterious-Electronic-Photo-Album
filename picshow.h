@@ -27,6 +27,7 @@ public:
     // 重新加载/刷新当前图片显示（触发 label 重新绘制）
     void ReloadPic();
     bool isModified() const { return _document.isModified(); }
+    void SetMaterialAlbumRoot(const QString &path) { _material_album_root = path; }
 
     // 清空当前图片数据并重绘清空展示区
     void Clear();
@@ -60,6 +61,8 @@ private:
     bool _show_original = false;
     QPushButton *_compare_button = nullptr;
     QPushButton *_restore_original_button = nullptr;
+    QPushButton *_save_material_button = nullptr;
+    QString _material_album_root;
 
     friend class PhotoEditCommand;
     void ApplyEditState(const PhotoEditDocument::EditState &state);
@@ -126,6 +129,7 @@ private slots:
     void SlotResetAlgorithms();
     void SlotRestoreOriginal();
     void SlotSaveProcessedImage();
+    void SlotSaveMaterial();
 
 public slots:
     // 树节点被双击选中时的图片加载槽函数
@@ -135,6 +139,7 @@ public slots:
     void SlotUpdatePic(const QString &path);
 
 signals:
+    void SigMaterialSaved(const QString &path, const QString &albumRoot);
     void SigNextClicked(); // 点击下一张按钮时发射的信号
     void SigPreClicked();  // 点击上一张按钮时发射的信号
 };

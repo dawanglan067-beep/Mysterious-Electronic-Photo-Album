@@ -19,6 +19,9 @@ public:
     QString CurrentAlbumRootPath() const;
     QList<PhotoEntry> VisiblePhotos(const QString &albumRootPath) const;
     bool SelectPhotoByPath(const QString &path);
+    QString AlbumRootForPhoto(const QString &path) const;
+    bool RegisterMaterial(const QString &albumRoot, const QString &savedPath,
+                          QString *registeredPath, QString *error);
 private:
     QSet<QString> _set_path;
     QTreeWidgetItem*_right_btn_item;

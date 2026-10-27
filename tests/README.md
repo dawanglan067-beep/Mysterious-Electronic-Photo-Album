@@ -4,6 +4,17 @@ Configure with `-DALBUM_BUILD_FEATURE_TESTS=ON`, build, then run
 `ctest --test-dir build-msvc --output-on-failure` in your Qt/MSVC environment.
 The option defaults to OFF for normal application builds.
 
+Material saving checks cover numbered PNG paths, two independent crop regions,
+color/alpha pixels, cancel, declined replacement, failed writing, source and history
+preservation, optional album notifications, integrated album context and photo-wall
+refresh, path deduplication, external file copying with collision avoidance,
+navigation links and reopening the album. An explicit output directory retains
+material-save-dialog.png. The suite also runs at QT_SCALE_FACTOR=2.
+Manual acceptance: crop a photo, click "另存为素材…", browse to a new location,
+save with and without "同时加入当前相册", then undo the crop and save another
+region. External files added to an album are copied into its "素材" directory.
+Saving inside the album is discovered on a later rescan even if not registered now.
+
 Image export checks cover full-resolution document rendering beyond the drag-preview
 limit, crop/rotation/mirrors/colors, PNG pixel and alpha preservation, JPEG quality
 and opaque backgrounds, BMP, replacing existing outputs, source path aliases,

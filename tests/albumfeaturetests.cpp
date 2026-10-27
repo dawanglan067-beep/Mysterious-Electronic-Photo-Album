@@ -12,6 +12,9 @@
 #include <QTransform>
 #include "imageprocessor.h"
 #include "imageexportservice.h"
+#include "materialsavedialog.h"
+#include <QLineEdit>
+#include <QMessageBox>
 #include "duplicatephotofinder.h"
 #include "workspacesettings.h"
 #include "musiccontroller.h"
@@ -87,6 +90,149 @@ int main(int argc, char **argv)
     check(temporary.isValid(), "temporary test directory");
     const QString outputDir = app.arguments().size() > 1 ? app.arguments().at(1) : temporary.path();
     QDir().mkpath(outputDir);
+    {
+        const QString album = temporary.filePath("material-album");
+        QDir().mkpath(album);
+        const QString sourcePath = album + "/source.png";
+        QImage source(140,100,QImage::Format_ARGB32);
+        for (int y = 0; y < source.height(); ++y)
+            for (int x = 0; x < source.width(); ++x)
+                source.setPixelColor(x,y,QColor(x,y,40,150));
+        check(source.save(sourcePath), "create material source");
+        const auto originalBytes = readFile(sourcePath);
+        PicShow viewer; viewer.resize(1200,800); viewer.show(); viewer.SlotSelectItem(sourcePath);
+        viewer.SetMaterialAlbumRoot(album);
+        app.processEvents();
+        auto *history = viewer.findChild<QUndoStack*>();
+        auto *saveButton = viewer.findChild<QPushButton*>("photoSaveMaterialButton");
+        check(saveButton && !saveButton->isEnabled(), "material save unavailable before crop");
+        const auto crop = [&](const QRect &rect) {
+            QTimer::singleShot(20, &viewer, [&, rect]() {
+                if (auto *dialog = qobject_cast<CropDialog*>(QApplication::activeModalWidget())) {
+                    dialog->findChild<CropCanvas*>()->setSelection(rect);
+                    dialog->accept();
+                }
+            });
+            QMetaObject::invokeMethod(&viewer,"SlotCrop",Qt::DirectConnection);
+        };
+        crop(QRect(5,8,60,40));
+        viewer.findChildren<QSlider*>().first()->setValue(15);
+        const int historyIndex = history->index(), historyCount = history->count();
+        const auto editedPreview = viewer.findChild<QLabel*>("label")->grab().toImage();
+        const QString first = MaterialSaveDialog::suggestedPath(sourcePath);
+        check(first.endsWith("source_crop_001.png") && saveButton->isEnabled(), "crop enables material action and numbered PNG name");
+        QString emittedPath, emittedAlbum;
+        int notifications = 0;
+        QObject::connect(&viewer, &PicShow::SigMaterialSaved, &viewer, [&](const QString &path, const QString &root) {
+            emittedPath = path; emittedAlbum = root; ++notifications;
+        });
+        const auto save = [&](bool accept, bool add, const QString &path) {
+            QTimer automation;
+            QObject::connect(&automation, &QTimer::timeout, &viewer, [&]() {
+                if (auto *dialog = qobject_cast<MaterialSaveDialog*>(QApplication::activeModalWidget())) {
+                    if (!accept) { dialog->reject(); return; }
+                    dialog->findChild<QLineEdit*>("materialOutputPath")->setText(path);
+                    dialog->findChild<QCheckBox*>("materialAddToAlbum")->setChecked(add);
+                    dialog->accept();
+                } else if (auto *message = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) {
+                    if (message->standardButtons() & QMessageBox::No) message->done(QMessageBox::No);
+                    else message->accept();
+                }
+            });
+            automation.start(10);
+            QMetaObject::invokeMethod(&viewer,"SlotSaveMaterial",Qt::DirectConnection);
+        };
+        save(false, false, first);
+        check(!QFileInfo::exists(first) && history->index() == historyIndex, "cancel material save keeps crop and history");
+        save(true, true, first);
+        ImageProcessor::Parameters params; params.brightness = 15;
+        check(QImage(first) == ImageProcessor::Apply(source.copy(QRect(5,8,60,40)), params)
+              && emittedPath == first && emittedAlbum == album && notifications == 1,
+              "material save writes full crop colors alpha and optional album notification");
+        check(history->index() == historyIndex && history->count() == historyCount && viewer.isModified()
+              && viewer.findChild<QLabel*>("label")->grab().toImage() == editedPreview,
+              "material save preserves document preview history and modification state");
+        save(true, true, temporary.filePath("missing-material-folder/fail.png"));
+        check(notifications == 1 && history->index() == historyIndex
+              && !QFileInfo::exists(temporary.filePath("missing-material-folder/fail.png")),
+              "material write failure preserves edits and emits no registration");
+        save(true, true, first);
+        check(notifications == 1, "declining replacement does not register material again");
+        const QString second = MaterialSaveDialog::suggestedPath(sourcePath);
+        check(second.endsWith("source_crop_002.png"), "material default advances past existing files");
+        QMetaObject::invokeMethod(&viewer,"SlotUndo",Qt::DirectConnection); // color
+        QMetaObject::invokeMethod(&viewer,"SlotUndo",Qt::DirectConnection); // crop
+        crop(QRect(70,20,50,60));
+        save(true, false, second);
+        check(QImage(second) == source.copy(QRect(70,20,50,60)) && notifications == 1
+              && readFile(sourcePath) == originalBytes, "extract second independent region without changing original or registering unchecked export");
+        save(true, true, sourcePath);
+        check(readFile(sourcePath) == originalBytes, "material UI cannot overwrite original");
+        viewer.Clear();
+        check(!saveButton->isEnabled(), "clear disables material action");
+        viewer.hide();
+
+        QSettings isolated(QStringLiteral("AlbumFeatureTests"), QStringLiteral("AlbumApp")); isolated.clear();
+        MainWindow materialWindow;
+        materialWindow.resize(1200,800);
+        auto &tree = *materialWindow.findChild<ProTreeWidget*>();
+        auto *materialWall = materialWindow.findChild<PhotoWallWidget*>();
+        auto *root = new ProTreeItem(&tree, "material album", album, TreeItemPro);
+        auto *original = new ProTreeItem(root,"source",sourcePath,root,TreeItemPic);
+        tree.setCurrentItem(original);
+        QString registered, error;
+        check(tree.AlbumRootForPhoto(sourcePath) == album, "resolve material album by source rather than unrelated tree selection");
+        check(tree.RegisterMaterial(album, first, &registered, &error)
+              && tree.VisiblePhotos(album).size() == 2 && tree.currentItem() == original,
+              "register local material adds node without switching editor selection");
+        app.processEvents();
+        check(materialWall->findChild<QListView*>()->model()->rowCount() == 2,
+              "material registration refreshes integrated photo wall");
+        tree.SelectPhotoByPath(sourcePath);
+        auto *integratedViewer = materialWindow.findChild<PicShow*>();
+        QTimer::singleShot(20, integratedViewer, [&]() {
+            if (auto *dialog = qobject_cast<CropDialog*>(QApplication::activeModalWidget())) {
+                dialog->findChild<CropCanvas*>()->setSelection(QRect(10,10,50,40));
+                dialog->accept();
+            }
+        });
+        QMetaObject::invokeMethod(integratedViewer,"SlotCrop",Qt::DirectConnection);
+        bool albumOptionAvailable = false;
+        QTimer::singleShot(20, integratedViewer, [&]() {
+            if (auto *dialog = qobject_cast<MaterialSaveDialog*>(QApplication::activeModalWidget())) {
+                albumOptionAvailable = dialog->findChild<QCheckBox*>("materialAddToAlbum")->isEnabled();
+                check(dialog->grab().save(outputDir + "/material-save-dialog.png"), "material save dialog screenshot");
+                dialog->reject();
+            }
+        });
+        QMetaObject::invokeMethod(integratedViewer,"SlotSaveMaterial",Qt::DirectConnection);
+        check(albumOptionAvailable, "main window loads source album context into material dialog");
+        check(tree.RegisterMaterial(album, first, &registered, &error) && tree.VisiblePhotos(album).size() == 2,
+              "material registration deduplicates existing path");
+        const QString external = temporary.filePath("external.png"); source.save(external);
+        check(tree.RegisterMaterial(album, external, &registered, &error)
+              && registered.startsWith(album + "/") && readFile(registered) == readFile(external),
+              "external material copied into album for persistent reopening");
+        const QString copied = registered;
+        check(tree.RegisterMaterial(album, external, &registered, &error) && registered == copied
+              && tree.VisiblePhotos(album).size() == 3, "repeated external registration reuses identical copy");
+        source.fill(Qt::red); source.save(external);
+        check(tree.RegisterMaterial(album, external, &registered, &error) && registered != copied
+              && QImage(copied) != QImage(registered), "different external content avoids same-name overwrite");
+        auto *photo = root->GetFirstPicChild();
+        int traversed = 0; ProTreeItem *previous = nullptr;
+        while (photo && traversed < 10) {
+            check(photo->GetPreItem() == previous, "registered materials have consistent previous links");
+            previous = photo; photo = photo->GetNextItem(); ++traversed;
+        }
+        check(traversed == 4 && !photo, "all material nodes participate in navigation");
+        check(!tree.RegisterMaterial(album + "/closed", first, &registered, &error)
+              && !error.isEmpty() && QFileInfo::exists(first), "registration failure preserves saved material");
+        tree.clear();
+        tree.SlotOpenPro(album);
+        check(tree.VisiblePhotos(album).size() == 5, "reopen scans saved materials including unregistered on-disk export");
+        isolated.clear();
+    }
     {
         QImage source(1900, 1000, QImage::Format_ARGB32);
         source.fill(QColor(30, 80, 150, 120));

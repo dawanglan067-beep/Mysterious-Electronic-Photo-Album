@@ -2,6 +2,7 @@
 #include "ui_picshow.h"
 #include "cropdialog.h"
 #include "imageexportservice.h"
+#include "materialsavedialog.h"
 #include <QInputDialog>
 #include <QGraphicsOpacityEffect>
 #include <QPropertyAnimation>
@@ -311,6 +312,12 @@ void PicShow::InitStudioUI()
     cropButton->setObjectName("photoCropButton");
     infoLayout->addWidget(cropButton);
     connect(cropButton, &QPushButton::clicked, this, &PicShow::SlotCrop);
+    _save_material_button = new QPushButton(tr("另存为素材…"), _info_panel);
+    _save_material_button->setObjectName("photoSaveMaterialButton");
+    _save_material_button->setToolTip(tr("将当前裁剪结果另存为素材，保留原照片与编辑历史"));
+    _save_material_button->setEnabled(false);
+    infoLayout->addWidget(_save_material_button);
+    connect(_save_material_button, &QPushButton::clicked, this, &PicShow::SlotSaveMaterial);
     QHBoxLayout *historyRow = new QHBoxLayout();
     auto *undoButton = new QPushButton(tr("撤销"), _info_panel);
     auto *redoButton = new QPushButton(tr("重做"), _info_panel);
@@ -499,6 +506,7 @@ void PicShow::ReloadPic()
 // 清空当前展示的图片数据与路径，并刷新重绘为空白
 void PicShow::Clear()
 {
+    _material_album_root.clear();
     SetOriginalComparison(false);
     _parameter_dragging = false;
     _undo_stack->clear();
@@ -967,6 +975,7 @@ void PicShow::ShowPreNextBtns(bool b_show)
 // 槽函数：选中/双击树节点时的图片加载逻辑
 void PicShow::SlotSelectItem(const QString &path)
 {
+    _material_album_root.clear();
     SetOriginalComparison(false);
     if (path.isEmpty())
     {
@@ -998,6 +1007,7 @@ void PicShow::SyncControlsFromDocument()
 {
     if (_compare_button) _compare_button->setEnabled(!_document.sourceImage().isNull());
     if (_restore_original_button) _restore_original_button->setEnabled(!_document.sourceImage().isNull());
+    if (_save_material_button) _save_material_button->setEnabled(!_document.sourceImage().isNull() && !_document.state().crop.isEmpty());
     setProperty("photoModified", _document.isModified());
     setWindowTitle(_document.isModified() ? tr("照片编辑 * 已修改") : tr("照片编辑"));
     const auto parameters = _document.parameters();
@@ -1081,4 +1091,31 @@ void PicShow::SetOriginalComparison(bool enabled)
     _show_original = show;
     if (!show && _compare_button) _compare_button->setDown(false);
     ReloadPic();
+}
+
+void PicShow::SlotSaveMaterial()
+{
+    if (_document.sourceImage().isNull() || _document.state().crop.isEmpty()) return;
+    SetOriginalComparison(false);
+    FinishParameterDrag();
+    const PhotoEditDocument snapshot = _document;
+    const QString albumRoot = _material_album_root;
+    MaterialSaveDialog dialog(snapshot.sourcepath(), snapshot.outputSize(), albumRoot, this);
+    if (dialog.exec() != QDialog::Accepted) return;
+    QString path = dialog.outputPath();
+    if (path.isEmpty()) return;
+    if (QFileInfo(path).suffix().isEmpty()) path += ".png";
+    if (QFileInfo::exists(path)
+        && QMessageBox::question(this, tr("覆盖素材文件"), tr("文件已存在，是否替换？\n%1").arg(path),
+                                 QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
+        return;
+    ImageExportService::Options options;
+    options.jpegQuality = dialog.jpegQuality();
+    const auto result = ImageExportService::exportDocument(snapshot, path, options);
+    if (!result.success) {
+        QMessageBox::warning(this, tr("素材保存失败"), result.error);
+        return;
+    }
+    if (dialog.addToAlbum()) emit SigMaterialSaved(QFileInfo(path).absoluteFilePath(), albumRoot);
+    else QMessageBox::information(this, tr("素材已保存"), tr("素材已保存，原照片和编辑历史保持不变：\n%1").arg(path));
 }
