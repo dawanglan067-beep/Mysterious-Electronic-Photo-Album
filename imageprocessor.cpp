@@ -1,6 +1,7 @@
 #include "imageprocessor.h"
 #include <QtMath>
 #include <algorithm>
+#include <QColorSpace>
 QImage ImageProcessor::Apply(const QImage &src, const Parameters &parameters)
 {
     if (src.isNull()) return src;
@@ -16,6 +17,7 @@ QImage ImageProcessor::Apply(const QImage &src, const Parameters &parameters)
         parameters.filter == FilterEmboss)
     {
         QImage convOut(w, h, QImage::Format_ARGB32);
+        convOut.setColorSpace(src.colorSpace());
         // 复制边界像素
         for (int y = 0; y < h; ++y)
         {

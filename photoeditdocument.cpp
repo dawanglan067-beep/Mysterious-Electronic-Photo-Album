@@ -1,15 +1,32 @@
 #include"photoeditdocument.h"
 #include <QTransform>
+#include <QBuffer>
+#include <QColorSpace>
+#include <QCryptographicHash>
+#include <QFile>
+#include <QImageReader>
 
 bool PhotoEditDocument::load(const QString &filePath)
 {
-    QImage image;
-    if(!image.load(filePath))
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly)) { clear(); return false; }
+    QByteArray bytes = file.readAll();
+    if (file.error() != QFileDevice::NoError) { clear(); return false; }
+    QBuffer buffer(&bytes);
+    buffer.open(QIODevice::ReadOnly);
+    QImageReader reader(&buffer);
+    reader.setAutoTransform(true);
+    QImage image = reader.read();
+    if(image.isNull())
     {
         clear();
         return false;
     }
     _sourcePath=filePath;
+    _sourceHash = QCryptographicHash::hash(bytes, QCryptographicHash::Sha256);
+    // Untagged images use sRGB; recognized profiles convert before 8-bit editing.
+    if (image.colorSpace().isValid()) image.convertToColorSpace(QColorSpace::SRgb);
+    else image.setColorSpace(QColorSpace::SRgb);
     _sourceImage=image;
     _state = EditState();
     _baseline = _state;
@@ -67,6 +84,7 @@ void PhotoEditDocument::clear()
 {
     _sourcePath.clear();
     _sourceImage = QImage();
+    _sourceHash.clear();
     _state = EditState();
     _baseline = _state;
 }

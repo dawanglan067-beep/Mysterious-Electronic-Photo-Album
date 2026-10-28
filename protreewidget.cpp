@@ -198,6 +198,16 @@ ProTreeWidget::~ProTreeWidget()
 
 }
 
+QStringList ProTreeWidget::OpenAlbumPaths() const
+{
+    QStringList result;
+    for (int i = 0; i < topLevelItemCount(); ++i) {
+        auto *root = dynamic_cast<ProTreeItem*>(topLevelItem(i));
+        if (root) result.append(root->GetPath());
+    }
+    return result;
+}
+
 void ProTreeWidget::AddProToTree(const QString name, const QString path)
 {
     QDir dir(path);

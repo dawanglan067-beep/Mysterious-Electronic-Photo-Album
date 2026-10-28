@@ -13,7 +13,8 @@ public:
     QString outputPath() const;
     bool addToAlbum() const;
     int jpegQuality() const;
-    static QString suggestedPath(const QString &sourcePath);
+    static QString suggestedPath(const QString &sourcePath, const QString &directory = {},
+                                 const QString &extension = QStringLiteral("png"));
 private:
     QLineEdit *_path;
     QCheckBox *_add;

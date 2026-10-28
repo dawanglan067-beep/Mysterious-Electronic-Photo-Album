@@ -35,6 +35,7 @@ public:
     const QString &sourcepath() const;
     //返回当前原图
     const QImage &sourceImage() const;
+    const QByteArray &sourceHash() const { return _sourceHash; }
     QImage Render(int previewMaxSize = 0) const;
     QSize outputSize() const;
     QRect sourceCropFromOrientedRect(const QRect &selection) const;
@@ -45,6 +46,7 @@ public:
 private:
     QString _sourcePath;//原始的图片路径
     QImage _sourceImage;//原始的图像数据
+    QByteArray _sourceHash; // Hash of the exact encoded bytes used for decoding.
     EditState _baseline; // 加载时的编辑基准，旧导出不更新此基准。
     EditState _state;//保存图像编辑的参数
 };

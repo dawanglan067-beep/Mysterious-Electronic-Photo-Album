@@ -44,7 +44,9 @@ qt_add_executable(Album
     histogramwidget.h histogramwidget.cpp
     imageprocessor.h imageprocessor.cpp
     imageexportservice.h imageexportservice.cpp
+    photosaveservice.h photosaveservice.cpp
     materialsavedialog.h materialsavedialog.cpp
+    materialfilepicker.h materialfilepicker.cpp
     materialimportservice.h materialimportservice.cpp
     albumdeletioncontroller.h albumdeletioncontroller.cpp
     albumloadcontroller.h albumloadcontroller.cpp

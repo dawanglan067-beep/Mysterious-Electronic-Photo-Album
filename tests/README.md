@@ -126,6 +126,14 @@ cancelled-import rollback, cancelled-open cleanup, and reopening after cancel.
 Temporary fixtures are used; these checks do not replace native folder-dialog
 or real mouse acceptance.
 
+Overwrite checks use disposable PNG/JPEG fixtures and verified backups: exact-byte
+recovery, multiple unique versions, corrupted-container rejection, existing-output
+protection, backup-location failures, same-size/time external modifications, format
+mismatch, actual JPEG decoded baselines and Windows replacement-sharing failure.
+Editor confirmation cancellation and success verify file preservation, history reset
+and thumbnail notification. EXIF fixtures cover all eight directions; a Display P3
+fixture checks sRGB conversion. These are not a complete codec or deployment matrix.
+
 Integration tests compile a tree implementation copy with a separate
 `AlbumFeatureTests` QSettings organization, preserving real user preferences.
 

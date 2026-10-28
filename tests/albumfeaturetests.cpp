@@ -14,6 +14,10 @@
 #include <QTransform>
 #include "imageprocessor.h"
 #include "imageexportservice.h"
+#include "photosaveservice.h"
+#include <QColorSpace>
+#include <QImageWriter>
+#include <QImageReader>
 #include "materialsavedialog.h"
 #include "phototrashservice.h"
 #include "materialimportservice.h"
@@ -54,6 +58,12 @@
 #include "removeprodialog.h"
 
 static int failures = 0;
+// Pixel regression is independent of profile metadata; color behavior is tested separately.
+static bool samePixels(QImage a, QImage b)
+{
+    a.setColorSpace({}); b.setColorSpace({});
+    return a == b;
+}
 static void check(bool condition, const char *message)
 {
     if (condition) qInfo() << "PASS" << message;
@@ -92,6 +102,7 @@ static QByteArray readFile(const QString &path)
     return file.readAll();
 }
 
+
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
@@ -103,6 +114,191 @@ int main(int argc, char **argv)
     check(temporary.isValid(), "temporary test directory");
     const QString outputDir = app.arguments().size() > 1 ? app.arguments().at(1) : temporary.path();
     QDir().mkpath(outputDir);
+    {
+        const QString dir = temporary.filePath("overwrite-cases");
+        const QString backupDir = temporary.filePath("overwrite-backups");
+        QDir().mkpath(dir);
+        QImage sample(32, 24, QImage::Format_ARGB32);
+        for (int y = 0; y < sample.height(); ++y) for (int x = 0; x < sample.width(); ++x)
+            sample.setPixelColor(x, y, QColor(x * 7, y * 9, (x+y)*4, (x+y)%2 ? 128 : 255));
+        const QString source = dir + "/source.png";
+        check(sample.save(source), "create overwrite source");
+        const QByteArray original = readFile(source);
+        PhotoEditDocument doc;
+        check(doc.load(source), "load overwrite document with byte fingerprint");
+        auto state = doc.state();
+        state.crop = QRect(2, 3, 20, 12); state.rotation = 90;
+        state.parameters.brightness = 10; doc.setState(state);
+        const auto rendered = doc.Render();
+        PhotoSaveService::Options options;
+        options.backupRoot = backupDir; options.albumRoots = {dir};
+        auto saved = PhotoSaveService::overwrite(doc, options);
+        check(saved.success && saved.committed && !saved.backupPath.isEmpty()
+              && doc.sourceImage() == rendered && !doc.isModified() && doc.state() == PhotoEditDocument::EditState(),
+              "overwrite backs up and switches document to actual saved pixels and clean baseline");
+        const QString restored = dir + "/restored.png";
+        check(PhotoSaveService::restoreCopy(saved.backupPath, restored).success && readFile(restored) == original,
+              "backup recovery restores exact pre-overwrite encoded bytes");
+        check(!PhotoSaveService::restoreCopy(saved.backupPath, source).success
+              && QImage(source) == rendered, "backup recovery refuses existing destination including source");
+        check(PhotoSaveService::backups(source, backupDir).size() == 1, "backup version discoverable by source identity");
+        doc.setParameters({3, 0, 0, ImageProcessor::FilterNone});
+        saved = PhotoSaveService::overwrite(doc, options);
+        check(saved.success && PhotoSaveService::backups(source, backupDir).size() == 2,
+              "repeated overwrite creates unique versions without replacing old backups");
+
+        // Corrupt a backup and verify the destination is never created.
+        QFile badBackup(saved.backupPath);
+        badBackup.open(QIODevice::Append); badBackup.write("corrupt"); badBackup.close();
+        const QString badRecovery = dir + "/bad-recovery.png";
+        check(!PhotoSaveService::restoreCopy(saved.backupPath, badRecovery).success
+              && !QFileInfo::exists(badRecovery), "corrupted backup rejected before creating recovery output");
+
+        doc.setParameters({5, 0, 0, ImageProcessor::FilterNone});
+        const auto editing = doc.state();
+        const auto sourceBytes = readFile(source);
+        options.backupRoot = source; // Existing file is not a backup directory.
+        saved = PhotoSaveService::overwrite(doc, options);
+        check(!saved.success && !saved.committed && readFile(source) == sourceBytes
+              && doc.state() == editing, "backup directory failure preserves source and current edits");
+        options.backupRoot = dir + "/forbidden-backups";
+        saved = PhotoSaveService::overwrite(doc, options);
+        check(!saved.success && !QFileInfo::exists(options.backupRoot) && readFile(source) == sourceBytes,
+              "backup location inside scanned album rejected before creation");
+        options.backupRoot = backupDir;
+        QByteArray changed = sourceBytes;
+        const auto originalTime = QFileInfo(source).lastModified();
+        changed[changed.size()-1] = changed.back() == 0 ? 1 : 0;
+        QFile external(source); external.open(QIODevice::WriteOnly); external.write(changed); external.close();
+        external.open(QIODevice::ReadWrite);
+        check(external.setFileTime(originalTime, QFileDevice::FileModificationTime), "restore external edit timestamp fixture");
+        external.close();
+        saved = PhotoSaveService::overwrite(doc, options);
+        check(!saved.success && !saved.committed && readFile(source) == changed && doc.state() == editing,
+              "same-size external byte modification blocks overwrite and preserves edits");
+
+        const QString disguised = dir + "/disguised.jpg";
+        QFile fake(disguised); fake.open(QIODevice::WriteOnly); fake.write(original); fake.close();
+        doc.load(disguised); doc.setParameters({5, 0, 0, ImageProcessor::FilterNone});
+        saved = PhotoSaveService::overwrite(doc, options);
+        check(!saved.success && readFile(disguised) == original, "actual format mismatch refuses overwrite");
+
+        const QString jpeg = dir + "/actual.jpg";
+        check(sample.save(jpeg, "JPEG"), "create JPEG overwrite sample");
+        doc.load(jpeg); doc.setParameters({9, 0, 0, ImageProcessor::FilterNone});
+        saved = PhotoSaveService::overwrite(doc, options);
+        check(saved.success && doc.sourceImage().convertToFormat(QImage::Format_RGB32)
+              == QImage(jpeg).convertToFormat(QImage::Format_RGB32) && !doc.isModified(),
+              "JPEG overwrite baseline uses actual lossy decoded pixels");
+
+        const QString wide = dir + "/wide.png";
+        QImage wideImage(8, 6, QImage::Format_RGB32); wideImage.fill(QColor(120, 90, 60));
+        wideImage.setColorSpace(QColorSpace::DisplayP3); wideImage.save(wide);
+        doc.load(wide);
+        const QImage expected = wideImage.convertedToColorSpace(QColorSpace::SRgb);
+        check(doc.sourceImage() == expected && doc.sourceImage().colorSpace() == QColorSpace(QColorSpace::SRgb),
+              "recognized source color profile converts to sRGB before editing");
+
+        // JPEG APP1 EXIF fixture with orientation 6; decoded raw pixels remain the reference.
+        const QString oriented = dir + "/orientation.jpg";
+        sample.save(oriented, "JPEG");
+        QByteArray jpegBytes = readFile(oriented);
+        const QImage raw = QImage::fromData(jpegBytes);
+        const QByteArray rawJpegBytes = jpegBytes;
+        QByteArray exif = QByteArray::fromHex("45786966000049492a0008000000010012010300010000000600000000000000");
+        const int length = exif.size() + 2;
+        QByteArray app1 = QByteArray::fromHex("ffe1");
+        app1.append(char(length >> 8)); app1.append(char(length & 255)); app1.append(exif);
+        jpegBytes.insert(2, app1);
+        QFile orientedFile(oriented); orientedFile.open(QIODevice::WriteOnly); orientedFile.write(jpegBytes); orientedFile.close();
+        doc.load(oriented);
+        QTransform turn; turn.rotate(90);
+        check(samePixels(doc.sourceImage(), raw.transformed(turn)),
+              "EXIF orientation normalizes source pixels before editing");
+        bool allDirections = true;
+        for (int direction = 1; direction <= 8; ++direction) {
+            QByteArray orientedExif = exif;
+            orientedExif[24] = char(direction);
+            QByteArray marker = QByteArray::fromHex("ffe1");
+            marker.append(char(length >> 8)); marker.append(char(length & 255)); marker.append(orientedExif);
+            QByteArray variant = rawJpegBytes;
+            variant.insert(2, marker);
+            QFile fixture(oriented); fixture.open(QIODevice::WriteOnly); fixture.write(variant); fixture.close();
+            QImage expectedDirection(direction >= 5 ? raw.height() : raw.width(),
+                                     direction >= 5 ? raw.width() : raw.height(), QImage::Format_RGB32);
+            for (int y = 0; y < raw.height(); ++y) for (int x = 0; x < raw.width(); ++x) {
+                const int w = raw.width(), h = raw.height();
+                QPoint point(x,y);
+                switch (direction) {
+                case 2: point = {w-1-x,y}; break;
+                case 3: point = {w-1-x,h-1-y}; break;
+                case 4: point = {x,h-1-y}; break;
+                case 5: point = {y,x}; break;
+                case 6: point = {h-1-y,x}; break;
+                case 7: point = {h-1-y,w-1-x}; break;
+                case 8: point = {y,w-1-x}; break;
+                }
+                expectedDirection.setPixel(point, raw.pixel(x,y));
+            }
+            allDirections &= doc.load(oriented) && samePixels(doc.sourceImage(), expectedDirection);
+        }
+        check(allDirections, "all eight EXIF orientations and mirrors normalize to expected pixels");
+        doc.setParameters({5, 0, 0, ImageProcessor::FilterNone});
+        saved = PhotoSaveService::overwrite(doc, options);
+        PhotoEditDocument reopened;
+        check(saved.success && reopened.load(oriented) && reopened.sourceImage() == doc.sourceImage()
+              && reopened.outputSize() == QSize(24,32), "oriented JPEG overwrite reopens without double rotation");
+
+        PicShow viewer; viewer.resize(1280, 800); viewer.show(); viewer.SlotSelectItem(restored);
+        QMetaObject::invokeMethod(&viewer, "SlotRotateRight", Qt::DirectConnection);
+        const auto beforeCancel = readFile(restored);
+        QTimer::singleShot(0, &viewer, [&]() {
+            auto *prompt = viewer.findChild<QMessageBox*>("photoOverwriteConfirmation");
+            if (prompt) prompt->done(QMessageBox::Cancel);
+        });
+        QMetaObject::invokeMethod(&viewer, "SlotOverwriteOriginal", Qt::DirectConnection);
+        check(viewer.isModified() && readFile(restored) == beforeCancel,
+              "canceling overwrite confirmation preserves source and undo history");
+        viewer.grab().save(outputDir + "/overwrite-editor.png");
+        const auto oldBackups = PhotoSaveService::backups(restored);
+        bool confirmed = false, overwritten = false;
+        QObject::connect(&viewer, &PicShow::SigSourceOverwritten, &viewer,
+                         [&](const QString &path) { overwritten = path == restored; });
+        QTimer prompts;
+        QObject::connect(&prompts, &QTimer::timeout, &viewer, [&]() {
+            if (auto *prompt = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) {
+                if (prompt->objectName() == "photoOverwriteConfirmation") {
+                    confirmed = true;
+                    prompt->done(QMessageBox::Yes);
+                } else prompt->accept();
+            }
+        });
+        prompts.start(10);
+        QMetaObject::invokeMethod(&viewer, "SlotOverwriteOriginal", Qt::DirectConnection);
+        prompts.stop();
+        check(confirmed && overwritten && !viewer.isModified()
+              && viewer.findChild<QUndoStack*>("photoUndoStack")->count() == 0
+              && QImage(restored).size() == QSize(24,32),
+              "confirmed overwrite updates disk and editor baseline clears history and notifies thumbnails");
+        // Remove only the backups created for this temporary fixture.
+        for (const auto &backup : PhotoSaveService::backups(restored))
+            if (!oldBackups.contains(backup)) QFile::remove(backup);
+#ifdef Q_OS_WIN
+        doc.load(jpeg); doc.setParameters({12, 0, 0, ImageProcessor::FilterNone});
+        const auto lockedBytes = readFile(jpeg);
+        const auto lockedState = doc.state();
+        HANDLE handle = CreateFileW(reinterpret_cast<LPCWSTR>(jpeg.utf16()), GENERIC_READ,
+                                    FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        check(handle != INVALID_HANDLE_VALUE, "hold overwrite source without replacement sharing");
+        if (handle != INVALID_HANDLE_VALUE) {
+            saved = PhotoSaveService::overwrite(doc, options);
+            CloseHandle(handle);
+            check(!saved.success && !saved.committed && readFile(jpeg) == lockedBytes
+                  && doc.state() == lockedState && !saved.backupPath.isEmpty(),
+                  "blocked source replacement preserves original edits and verified backup");
+        }
+#endif
+    }
     {
         QTreeWidget tree;
         AlbumLoadController loader(&tree);
@@ -469,7 +665,7 @@ int main(int argc, char **argv)
         requestDeletion({first,fakePath},true,false,true,rescued);
         QApplication::setAttribute(Qt::AA_DontUseNativeDialogs,false);
         ImageProcessor::Parameters savedParams; savedParams.brightness = 25;
-        check(QImage(rescued) == ImageProcessor::Apply(fixture,savedParams),
+        check(samePixels(QImage(rescued), ImageProcessor::Apply(fixture,savedParams)),
               "export-before-delete preserves full edited pixels in separate copy");
         check(!QFileInfo::exists(first) && readFile(outside) == externalBytes
               && QFileInfo::exists(fakePath) && tree->VisiblePhotos(album).size() == 1,
@@ -675,7 +871,7 @@ int main(int argc, char **argv)
         ImageProcessor::Parameters parameters; parameters.brightness = 25;
         check(!QFileInfo::exists(folderPath) && root->childCount() == 0 && view->model()->rowCount() == 0
               && history->count() == 0 && !editor->isModified() && readFile(outside) == originalBytes
-              && QImage(exportPath) == ImageProcessor::Apply(fixture,parameters),
+              && samePixels(QImage(exportPath), ImageProcessor::Apply(fixture,parameters)),
               "folder recycle removes entire subtree preserves external source and exports edited rescue");
         tree->clear(); tree->SlotOpenPro(album); app.processEvents();
         check(tree->topLevelItemCount() == 1 && tree->topLevelItem(0)->childCount() == 0,
@@ -749,7 +945,7 @@ int main(int argc, char **argv)
         check(!QFileInfo::exists(first) && history->index() == historyIndex, "cancel material save keeps crop and history");
         save(true, true, first);
         ImageProcessor::Parameters params; params.brightness = 15;
-        check(QImage(first) == ImageProcessor::Apply(source.copy(QRect(5,8,60,40)), params)
+        check(samePixels(QImage(first), ImageProcessor::Apply(source.copy(QRect(5,8,60,40)), params))
               && emittedPath == first && emittedAlbum == album && notifications == 1,
               "material save writes full crop colors alpha and optional album notification");
         check(history->index() == historyIndex && history->count() == historyCount && viewer.isModified()
@@ -763,11 +959,42 @@ int main(int argc, char **argv)
         check(notifications == 1, "declining replacement does not register material again");
         const QString second = MaterialSaveDialog::suggestedPath(sourcePath);
         check(second.endsWith("source_crop_002.png"), "material default advances past existing files");
+        const QString otherDirectory = temporary.filePath("material-other-destination");
+        QDir().mkpath(otherDirectory);
+        const QString occupied = otherDirectory + "/source_crop_001.png";
+        check(source.save(occupied), "create material collision outside source directory");
+        const QByteArray occupiedBytes = readFile(occupied);
+        const auto checkDestinationSuggestion = [&]() {
+            MaterialSaveDialog reopened(sourcePath, QSize(60,40), album);
+            QTimer::singleShot(20, &reopened, [&]() {
+                auto *chooser = qobject_cast<QFileDialog*>(QApplication::activeModalWidget());
+                check(chooser != nullptr, "material location chooser opens");
+                if (!chooser) return;
+                chooser->setDirectory(otherDirectory);
+                QMetaObject::invokeMethod(chooser, "directoryEntered", Qt::DirectConnection,
+                                          Q_ARG(QString, otherDirectory));
+                check(QFileInfo(chooser->selectedFiles().value(0)).fileName() == "source_crop_002.png",
+                      "changing destination skips existing material in actual directory");
+                const QString jpegFilter = QString::fromUtf8("JPEG 图像 (*.jpg *.jpeg)");
+                chooser->selectNameFilter(jpegFilter);
+                QMetaObject::invokeMethod(chooser, "filterSelected", Qt::DirectConnection,
+                                          Q_ARG(QString, jpegFilter));
+                check(QFileInfo(chooser->selectedFiles().value(0)).fileName() == "source_crop_001.jpg",
+                      "changing material format checks numbering for selected extension");
+                chooser->reject();
+            });
+            for (auto *button : reopened.findChildren<QPushButton*>()) {
+                if (button->text() == QString::fromUtf8("选择位置…")) { button->click(); break; }
+            }
+        };
+        checkDestinationSuggestion();
+        checkDestinationSuggestion(); // 新对话框无内存计数，仍以磁盘上的文件为准。
+        check(readFile(occupied) == occupiedBytes, "suggestion and chooser cancellation preserve existing material");
         QMetaObject::invokeMethod(&viewer,"SlotUndo",Qt::DirectConnection); // color
         QMetaObject::invokeMethod(&viewer,"SlotUndo",Qt::DirectConnection); // crop
         crop(QRect(70,20,50,60));
         save(true, false, second);
-        check(QImage(second) == source.copy(QRect(70,20,50,60)) && notifications == 1
+        check(samePixels(QImage(second), source.copy(QRect(70,20,50,60))) && notifications == 1
               && readFile(sourcePath) == originalBytes, "extract second independent region without changing original or registering unchecked export");
         save(true, true, sourcePath);
         check(readFile(sourcePath) == originalBytes, "material UI cannot overwrite original");
@@ -898,7 +1125,7 @@ int main(int argc, char **argv)
         check(!ImageExportService::writeImage(transparent, jpeg, {}, options).success && readFile(jpeg) == jpegBefore,
               "invalid JPEG options preserve existing file");
         const QString bmp = temporary.filePath("export.bmp");
-        check(ImageExportService::writeImage(decoded, bmp, {}).success && QImage(bmp) == decoded,
+        check(ImageExportService::writeImage(decoded, bmp, {}).success && samePixels(QImage(bmp), decoded),
               "BMP export remains available");
         check(readFile(sourcePath) == sourceBytes, "all export paths preserve source bytes");
     }
@@ -963,10 +1190,10 @@ int main(int argc, char **argv)
         const QString second = temporary.filePath("document-second.png");
         check(source.save(first) && source.save(second), "create editor fixtures");
         PhotoEditDocument document;
-        check(document.load(first) && document.Render() == source, "document loads original without changes");
+        check(document.load(first) && samePixels(document.Render(), source), "document loads original without changes");
         document.setParameters({25, -15, 30, ImageProcessor::FilterInvert});
-        check(document.Render() == ImageProcessor::Apply(source, document.parameters())
-              && document.sourceImage() == source, "document renders edits without changing original");
+        check(samePixels(document.Render(), ImageProcessor::Apply(source, document.parameters()))
+              && samePixels(document.sourceImage(), source), "document renders edits without changing original");
         check(document.load(second) && document.parameters().brightness == 0
               && document.parameters().filter == ImageProcessor::FilterNone,
               "switching source resets document parameters");
@@ -1207,7 +1434,7 @@ int main(int argc, char **argv)
         check(!document.isModified() && document.state().crop.isEmpty(), "full image crop is canonical unmodified state");
         state.crop = QRect(5, 6, 40, 30); state.parameters.brightness = 15;
         document.setState(state);
-        check(document.Render() == ImageProcessor::Apply(source.copy(state.crop), state.parameters),
+        check(samePixels(document.Render(), ImageProcessor::Apply(source.copy(state.crop), state.parameters)),
               "crop precedes color operations and preserves alpha");
         const auto bytesBefore = readFile(path);
         CropCanvas canvas(source); canvas.resize(640, 480); canvas.show(); app.processEvents();

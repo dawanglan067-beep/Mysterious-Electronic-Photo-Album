@@ -111,6 +111,7 @@ MainWindow::MainWindow(QWidget *parent)
         }
     });
     const auto refreshWall = [this, pro_tree_widget]() {
+        static_cast<PicShow*>(_picshow)->SetBackupAlbumRoots(pro_tree_widget->OpenAlbumPaths());
         _photo_wall->SetPhotos(pro_tree_widget->VisiblePhotos(pro_tree_widget->CurrentAlbumRootPath()));
     };
     connect(pro_tree_widget, &ProTreeWidget::SigPhotoSetChanged, this, refreshWall, Qt::QueuedConnection);
@@ -159,6 +160,9 @@ MainWindow::MainWindow(QWidget *parent)
             QMessageBox::warning(this, tr("导出失败"), message);
     });
     auto *pro_pic_show=dynamic_cast<PicShow*>(_picshow);
+    connect(pro_pic_show, &PicShow::SigSourceOverwritten, this, [refreshWall](const QString &) {
+        refreshWall(); // SetPhotos resets the thumbnail generation and cache.
+    });
     const auto loadEditor = [pro_tree_widget, pro_pic_show](const QString &path) {
         pro_pic_show->SlotSelectItem(path);
         pro_pic_show->SetMaterialAlbumRoot(pro_tree_widget->AlbumRootForPhoto(path));

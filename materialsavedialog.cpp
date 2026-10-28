@@ -1,5 +1,8 @@
 #include "materialsavedialog.h"
 #include "imageexportservice.h"
+#include "materialfilepicker.h"
+#include <QGuiApplication>
+#include <QMessageBox>
 #include <QCheckBox>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -9,15 +12,18 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QSpinBox>
 #include <QVBoxLayout>
 
-QString MaterialSaveDialog::suggestedPath(const QString &sourcePath)
+QString MaterialSaveDialog::suggestedPath(const QString &sourcePath, const QString &directory,
+                                        const QString &extension)
 {
     const QFileInfo source(sourcePath);
+    const QDir target(directory.isEmpty() ? source.absolutePath() : directory);
     for (int number = 1; ; ++number) {
-        const QString path = source.dir().absoluteFilePath(source.completeBaseName()
-            + QString("_crop_%1.png").arg(number, 3, 10, QLatin1Char('0')));
+        const QString path = target.absoluteFilePath(source.completeBaseName()
+            + QString("_crop_%1.%2").arg(number, 3, 10, QLatin1Char('0')).arg(extension));
         if (!QFileInfo::exists(path)) return path;
     }
 }
@@ -41,15 +47,49 @@ MaterialSaveDialog::MaterialSaveDialog(const QString &sourcePath, const QSize &o
     auto *browse = new QPushButton(tr("选择位置…"), this);
     row->addWidget(browse);
     layout->addLayout(row);
-    connect(browse, &QPushButton::clicked, this, [this]() {
+    connect(browse, &QPushButton::clicked, this, [this, sourcePath]() {
+        if (QGuiApplication::platformName() != "offscreen" && QGuiApplication::platformName() != "minimal") {
+            const auto result = MaterialFilePicker::choose(sourcePath, _path->text(), this);
+            if (!result.error.isEmpty()) QMessageBox::warning(this, tr("保存位置选择失败"), result.error);
+            else if (!result.path.isEmpty()) _path->setText(result.path);
+            return;
+        }
         const auto extensions = ImageExportService::supportedExtensions();
         QStringList filters;
         if (extensions.contains("png")) filters << tr("PNG 图像 (*.png)");
         if (extensions.contains("jpg")) filters << tr("JPEG 图像 (*.jpg *.jpeg)");
         if (extensions.contains("bmp")) filters << tr("BMP 图像 (*.bmp)");
-        QString selected = filters.value(0);
-        QString path = QFileDialog::getSaveFileName(this, tr("素材保存位置"), _path->text(), filters.join(";;"), &selected);
-        if (path.isEmpty()) return;
+        QFileDialog chooser(this, tr("素材保存位置"));
+        chooser.setObjectName("materialLocationDialog");
+        // 无桌面的自动测试使用 Qt 后备窗口，正常 Windows 界面走原生对话框。
+        chooser.setOption(QFileDialog::DontUseNativeDialog);
+        chooser.setAcceptMode(QFileDialog::AcceptSave);
+        chooser.setFileMode(QFileDialog::AnyFile);
+        chooser.setNameFilters(filters);
+        const QFileInfo initial(_path->text());
+        chooser.setDirectory(initial.absolutePath());
+        const QString suffix = initial.suffix().toLower();
+        if (suffix == "jpg" || suffix == "jpeg") chooser.selectNameFilter(tr("JPEG 图像 (*.jpg *.jpeg)"));
+        else if (suffix == "bmp") chooser.selectNameFilter(tr("BMP 图像 (*.bmp)"));
+        const QRegularExpression numberedName("^" + QRegularExpression::escape(QFileInfo(sourcePath).completeBaseName())
+                                             + "_crop_[0-9]+$");
+        bool automaticName = numberedName.match(initial.completeBaseName()).hasMatch();
+        const auto updateName = [&]() {
+            if (!automaticName) return;
+            const QString filter = chooser.selectedNameFilter();
+            const QString extension = filter == tr("JPEG 图像 (*.jpg *.jpeg)") ? "jpg"
+                : (filter == tr("BMP 图像 (*.bmp)") ? "bmp" : "png");
+            chooser.selectFile(QFileInfo(suggestedPath(sourcePath, chooser.directory().absolutePath(), extension)).fileName());
+        };
+        chooser.selectFile(initial.fileName());
+        connect(&chooser, &QFileDialog::directoryEntered, &chooser, updateName);
+        connect(&chooser, &QFileDialog::filterSelected, &chooser, updateName);
+        if (auto *nameEdit = chooser.findChild<QLineEdit*>("fileNameEdit"))
+            connect(nameEdit, &QLineEdit::textEdited, &chooser, [&]() { automaticName = false; });
+        updateName();
+        if (chooser.exec() != QDialog::Accepted || chooser.selectedFiles().isEmpty()) return;
+        QString path = chooser.selectedFiles().first();
+        const QString selected = chooser.selectedNameFilter();
         if (QFileInfo(path).suffix().isEmpty())
             path += selected == tr("JPEG 图像 (*.jpg *.jpeg)") ? ".jpg"
                 : (selected == tr("BMP 图像 (*.bmp)") ? ".bmp" : ".png");

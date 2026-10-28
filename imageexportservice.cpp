@@ -5,6 +5,7 @@
 #include <QImageWriter>
 #include <QPainter>
 #include <QSaveFile>
+#include <QColorSpace>
 
 namespace ImageExportService {
 QStringList supportedExtensions()
@@ -45,12 +46,17 @@ Result writeImage(const QImage &image, const QString &path,
                  || !options.jpegBackground.isValid() || options.jpegBackground.alpha() != 255))
         return {false, QStringLiteral("JPEG 质量必须为 0–100，背景色必须不透明。")};
     QImage output = image;
+    if (output.colorSpace().isValid()) output.convertToColorSpace(QColorSpace::SRgb);
+    else output.setColorSpace(QColorSpace::SRgb);
     if (jpeg) {
+        const QImage normalized = output;
         output = QImage(image.size(), QImage::Format_RGB32);
         if (output.isNull()) return {false, QStringLiteral("无法分配导出图像内存。")};
         output.fill(options.jpegBackground);
         QPainter painter(&output);
-        painter.drawImage(0, 0, image);
+        painter.drawImage(0, 0, normalized);
+        painter.end();
+        output.setColorSpace(QColorSpace::SRgb);
     }
     QSaveFile file(path);
     file.setDirectWriteFallback(false);

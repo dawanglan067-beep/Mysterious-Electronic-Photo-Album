@@ -15,6 +15,7 @@ public:
     ~ProTreeWidget();
     void AddProToTree(const QString name,const QString path);
     QString CurrentAlbumRootPath() const;
+    QStringList OpenAlbumPaths() const;
     QList<PhotoEntry> VisiblePhotos(const QString &albumRootPath) const;
     bool SelectPhotoByPath(const QString &path);
     QString AlbumRootForPhoto(const QString &path) const;

@@ -29,6 +29,7 @@ public:
     void ReloadPic();
     bool isModified() const { return _document.isModified(); }
     void SetMaterialAlbumRoot(const QString &path) { _material_album_root = path; }
+    void SetBackupAlbumRoots(const QStringList &paths) { _backup_album_roots = paths; }
     bool IsEditingPath(const QString &path) const;
     bool ConfirmDeletionOfEditedPhoto(const QStringList &deletionPaths = {});
 
@@ -64,6 +65,8 @@ private:
     QPushButton *_restore_original_button = nullptr;
     QPushButton *_save_material_button = nullptr;
     QString _material_album_root;
+    QStringList _backup_album_roots;
+    QPushButton *_overwrite_button = nullptr;
 
     friend class PhotoEditCommand;
     void ApplyEditState(const PhotoEditDocument::EditState &state);
@@ -115,6 +118,8 @@ private slots:
     void SlotRestoreOriginal();
     void SlotSaveProcessedImage();
     void SlotSaveMaterial();
+    void SlotOverwriteOriginal();
+    void SlotRestoreBackup();
 
 public slots:
     // 树节点被双击选中时的图片加载槽函数
@@ -124,6 +129,7 @@ public slots:
     void SlotUpdatePic(const QString &path);
 
 signals:
+    void SigSourceOverwritten(const QString &path);
     void SigMaterialSaved(const QString &path, const QString &albumRoot);
     void SigNextClicked(); // 点击下一张按钮时发射的信号
     void SigPreClicked();  // 点击上一张按钮时发射的信号

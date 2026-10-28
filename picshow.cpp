@@ -3,6 +3,9 @@
 #include "ui_picshow.h"
 #include "cropdialog.h"
 #include "imageexportservice.h"
+#include "photosaveservice.h"
+#include <QScopedValueRollback>
+#include <QFile>
 #include "materialsavedialog.h"
 #include <QInputDialog>
 #include <QGraphicsOpacityEffect>
@@ -87,7 +90,6 @@ PicShow::PicShow(QWidget *parent)
 
     // 构建底部专业画布工具栏与右侧直方图/元数据/算法工坊侧边栏
     InitStudioUI();
-    connect(ui->label, &PhotoCanvas::SigZoomTextChanged, _btn_zoom_reset, &QPushButton::setText);
 }
 
 PicShow::~PicShow()
@@ -127,7 +129,7 @@ void PicShow::InitStudioUI()
     QPushButton *btnZoomOut = makeToolBtn("缩小", tr("缩小画布 (鼠标滚轮向下)"));
     btnZoomOut->setIcon(QIcon(":/icon/line/zoomout.svg"));
     btnZoomOut->setIconSize(QSize(20, 20));
-    _btn_zoom_reset = makeToolBtn("100% 自适应", tr("点击重置为自适应窗口大小 (双击画布可切换)"));
+    _btn_zoom_reset = makeToolBtn(tr("适应窗口"), tr("点击重置为自适应窗口大小 (双击画布可切换)"));
     _btn_zoom_reset->setIcon(QIcon(":/icon/line/fit.svg"));
     _btn_zoom_reset->setIconSize(QSize(20, 20));
     QPushButton *btnZoomIn = makeToolBtn("放大", tr("放大画布 (鼠标滚轮向上)"));
@@ -167,6 +169,14 @@ void PicShow::InitStudioUI()
     tbLayout->addWidget(btnInfo);
     tbLayout->addStretch();
 
+    // 缩放状态单独显示，避免用状态文字覆盖按钮的操作名称。
+    QLabel *zoomStatus = new QLabel(tr("当前视图：100% 自适应"), centerContainer);
+    zoomStatus->setObjectName("photoZoomStatus");
+    zoomStatus->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    zoomStatus->setToolTip(tr("自适应模式下的百分比以适应窗口的尺寸为基准；1:1 表示原始像素显示"));
+    connect(ui->label, &PhotoCanvas::SigZoomTextChanged, zoomStatus,
+            [zoomStatus](const QString &text) { zoomStatus->setText(tr("当前视图：%1").arg(text)); });
+    centerLayout->addWidget(zoomStatus, 0);
     centerLayout->addWidget(_toolbar_wid, 0);
     ui->horizontalLayout->insertWidget(labelIdx, centerContainer, 1);
 
@@ -251,6 +261,15 @@ void PicShow::InitStudioUI()
     _save_material_button->setEnabled(false);
     infoLayout->addWidget(_save_material_button);
     connect(_save_material_button, &QPushButton::clicked, this, &PicShow::SlotSaveMaterial);
+    _overwrite_button = new QPushButton(tr("覆盖原图…"), _info_panel);
+    _overwrite_button->setObjectName("photoOverwriteButton");
+    _overwrite_button->setEnabled(false);
+    infoLayout->addWidget(_overwrite_button);
+    connect(_overwrite_button, &QPushButton::clicked, this, &PicShow::SlotOverwriteOriginal);
+    auto *backupButton = new QPushButton(tr("备份与恢复…"), _info_panel);
+    backupButton->setObjectName("photoBackupButton");
+    infoLayout->addWidget(backupButton);
+    connect(backupButton, &QPushButton::clicked, this, &PicShow::SlotRestoreBackup);
     QHBoxLayout *historyRow = new QHBoxLayout();
     auto *undoButton = new QPushButton(tr("撤销"), _info_panel);
     auto *redoButton = new QPushButton(tr("重做"), _info_panel);
@@ -809,6 +828,7 @@ void PicShow::SlotUpdatePic(const QString &path)
 
 void PicShow::SyncControlsFromDocument()
 {
+    if (_overwrite_button) _overwrite_button->setEnabled(!_document.sourceImage().isNull() && _document.isModified());
     if (_compare_button) _compare_button->setEnabled(!_document.sourceImage().isNull());
     if (_restore_original_button) _restore_original_button->setEnabled(!_document.sourceImage().isNull());
     if (_save_material_button) _save_material_button->setEnabled(!_document.sourceImage().isNull() && !_document.state().crop.isEmpty());
@@ -900,4 +920,85 @@ void PicShow::SlotSaveMaterial()
     }
     if (dialog.addToAlbum()) emit SigMaterialSaved(QFileInfo(path).absoluteFilePath(), albumRoot);
     else QMessageBox::information(this, tr("素材已保存"), tr("素材已保存，原照片和编辑历史保持不变：\n%1").arg(path));
+}
+
+void PicShow::SlotOverwriteOriginal()
+{
+    if (_document.sourceImage().isNull() || !_document.isModified()) return;
+    FinishParameterDrag();
+    SetOriginalComparison(false);
+    const PhotoEditDocument snapshot = _document;
+    const QString source = snapshot.sourcepath();
+    QMessageBox prompt(QMessageBox::Warning, tr("覆盖原图"),
+        tr("将替换磁盘上的照片：\n%1\n\n覆盖前会自动备份到：\n%2\n\n"
+           "成功后以保存结果为新原图，并清空撤销历史。旧版本可从“备份与恢复”恢复为副本。\n"
+           "拍摄时间、GPS 等元数据可能丢失；JPEG 以质量 95 重新编码，可能有损。\n"
+           "图像按 8 位 sRGB 输出，不保证广色域或高位深保真。是否继续？")
+            .arg(QDir::toNativeSeparators(source), QDir::toNativeSeparators(PhotoSaveService::backupRoot())),
+        QMessageBox::Yes | QMessageBox::Cancel, this);
+    prompt.setObjectName("photoOverwriteConfirmation");
+    prompt.setDefaultButton(QMessageBox::Cancel);
+    if (prompt.exec() != QMessageBox::Yes) return;
+    if (_document.sourcepath() != source || !(_document.state() == snapshot.state())
+        || _document.sourceHash() != snapshot.sourceHash()) {
+        QMessageBox::warning(this, tr("未覆盖"), tr("确认期间当前照片或编辑已变化，请重新操作。"));
+        return;
+    }
+    PhotoSaveService::Options options;
+    options.albumRoots = _backup_album_roots;
+    if (!_material_album_root.isEmpty()) options.albumRoots.append(_material_album_root);
+    const auto result = PhotoSaveService::overwrite(_document, options);
+    if (result.committed) emit SigSourceOverwritten(source);
+    if (!result.success) {
+        QMessageBox::warning(this, result.committed ? tr("已替换但验证失败") : tr("未覆盖原图"),
+            result.error + (result.backupPath.isEmpty() ? QString() : tr("\n备份：%1").arg(result.backupPath)));
+        return;
+    }
+    _undo_stack->clear();
+    _parameter_dragging = false;
+    SyncControlsFromDocument();
+    ResetViewFit();
+    RebuildTransformedPixmap();
+    QMessageBox::information(this, tr("覆盖完成"), tr("原图已更新，编辑历史已重置。\n备份：%1").arg(result.backupPath));
+}
+
+void PicShow::SlotRestoreBackup()
+{
+    const QString source = _document.sourcepath();
+    const QStringList files = source.isEmpty() ? QStringList() : PhotoSaveService::backups(source);
+    if (files.isEmpty()) {
+        QMessageBox::information(this, tr("备份与恢复"),
+            tr("当前照片没有可用备份。备份位置：\n%1\n备份不会自动清理，可复制此目录到其他磁盘长期保存。")
+                .arg(PhotoSaveService::backupRoot()));
+        return;
+    }
+    QStringList labels;
+    for (const auto &file : files) labels.append(QFileInfo(file).fileName());
+    bool accepted = false;
+    const QString selected = QInputDialog::getItem(this, tr("备份与恢复"),
+        tr("选择版本（较新的在前）。恢复会保留当前原图和编辑："), labels, 0, false, &accepted);
+    if (!accepted) return;
+    const QString backup = files.at(labels.indexOf(selected));
+    const QString action = QInputDialog::getItem(this, tr("备份操作"), tr("选择操作"),
+        {tr("恢复为新副本"), tr("打开备份目录"), tr("删除此备份")}, 0, false, &accepted);
+    if (!accepted) return;
+    if (action == tr("打开备份目录")) {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(backup).absolutePath()));
+        return;
+    }
+    if (action == tr("删除此备份")) {
+        if (QMessageBox::warning(this, tr("永久删除备份"),
+            tr("将永久删除这一备份，无法从程序恢复。当前原图不受影响。\n%1").arg(backup),
+            QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) == QMessageBox::Yes
+            && !QFile::remove(backup))
+            QMessageBox::warning(this, tr("清理失败"), tr("无法删除备份。"));
+        return;
+    }
+    const QFileInfo info(source);
+    const QString destination = QFileDialog::getSaveFileName(this, tr("恢复备份为新副本"),
+        info.absolutePath() + '/' + info.completeBaseName() + "_restored." + info.suffix());
+    if (destination.isEmpty()) return;
+    const auto result = PhotoSaveService::restoreCopy(backup, destination);
+    if (!result.success) QMessageBox::warning(this, tr("恢复失败"), result.error);
+    else QMessageBox::information(this, tr("备份已恢复为副本"), destination);
 }
