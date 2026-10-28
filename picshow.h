@@ -12,6 +12,7 @@
 #include "histogramwidget.h"
 #include "imageprocessor.h"
 #include"photoeditdocument.h"
+class PhotoAdjustmentPanel;
 namespace Ui {
 class PicShow;
 }
@@ -38,8 +39,6 @@ protected:
     // 监听鼠标进入/离开事件，用于控制上一张/下一张按钮的淡入淡出动画
     bool event(QEvent *event) override;
 
-    // 事件过滤器：拦截 ui->label 的 Paint、滚轮缩放、鼠标拖拽平移、双击切换事件
-    bool eventFilter(QObject *watched, QEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
     void reject() override {}
 
@@ -61,7 +60,6 @@ private:
     void SyncControlsFromDocument();
     void SetOriginalComparison(bool enabled);
     bool ExportProcessedImage(const QStringList &protectedPaths = {});
-    bool _show_original = false;
     QPushButton *_compare_button = nullptr;
     QPushButton *_restore_original_button = nullptr;
     QPushButton *_save_material_button = nullptr;
@@ -80,15 +78,6 @@ private:
     QPropertyAnimation* _animation_show_pre;   // 上一张按钮的透明度动画
     QPropertyAnimation* _animation_show_next;  // 下一张按钮的透明度动画
     bool _b_btnvisible;                       // 标记当前按钮是否处于可见状态
-    QPixmap Original_map;                     // 当前经过几何变换后的高清原图数据（避免多次缩放导致画质退化）
-
-    // ===== 专业画布交互状态 =====
-    double _zoom_factor;                      // 缩放倍率（1.0 表示自适应窗口基准下的 100%，支持 0.1 ~ 8.0）
-    bool _is_actual_pixel;                    // 是否处于 1:1 原始像素模式
-    QPointF _pan_offset;                      // 画布拖拽平移偏移量
-    bool _is_dragging;                        // 是否正在按住鼠标左键拖拽画布
-    QPoint _drag_last_pos;                    // 上一次鼠标拖拽坐标
-
     // ===== 底部工具栏与右侧直方图/算法工坊面板控件 =====
     QWidget *_toolbar_wid;
     QPushButton *_btn_zoom_reset;
@@ -102,15 +91,8 @@ private:
     QLabel *_lbl_meta_time;
     QLabel *_lbl_meta_path;
 
-    // ===== 内置图像算法工坊状态与控件 =====
-    class QSlider *_slider_bright;
-    class QSlider *_slider_contrast;
-    class QSlider *_slider_sat;
-    QLabel *_lbl_bright_val;
-    QLabel *_lbl_contrast_val;
-    QLabel *_lbl_sat_val;
+    PhotoAdjustmentPanel *_adjustments = nullptr;
     PhotoEditDocument _document;
-    class QComboBox *_combo_filter;
 
 
 

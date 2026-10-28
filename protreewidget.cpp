@@ -1,5 +1,8 @@
+#include "duplicatereviewdialog.h"
+#include "albumloadcontroller.h"
 #include "protreewidget.h"
 #include "albumfolderpicker.h"
+#include "materialimportservice.h"
 #include "phototrashservice.h"
 #include <QSignalBlocker>
 #include "duplicatephotofinder.h"
@@ -10,21 +13,12 @@
 #include "protreeitem.h"
 #include <QGuiApplication>
 #include <QMenu>
-#include <qprogressdialog.h>
 #include "workspacesettings.h"
 #include <QTimer>
-#include <QScopedValueRollback>
 #include <QDialog>
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QLabel>
-#include <QPushButton>
-#include <QListWidget>
 #include <QMessageBox>
 #include <QFileInfo>
 #include <QFile>
-#include <QImageReader>
-#include <QCryptographicHash>
 #include <QStandardPaths>
 #include "removeprodialog.h"
 #include "slideshowdlg.h"
@@ -55,14 +49,6 @@ bool MaterialInsideAlbum(const QString &path, const QString &root)
 #else
     return path.startsWith(prefix);
 #endif
-}
-
-QByteArray MaterialFileHash(const QString &path)
-{
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) return {};
-    QCryptographicHash hash(QCryptographicHash::Sha256);
-    return hash.addData(&file) ? hash.result() : QByteArray();
 }
 
 // 检查给定的绝对路径是否属于操作系统受保护的系统级目录或用户核心个人资料库（坚决拦截本地物理删除）
@@ -129,8 +115,8 @@ bool SendPathToRecycleBin(const QString &path)
 
 
 ProTreeWidget::ProTreeWidget(QWidget *parent): QTreeWidget(parent)
-    ,_active_item(nullptr),_right_btn_item(nullptr),_open_progressdlg(nullptr),_dialog_progress(nullptr)
-    ,_selecetd_item(nullptr),_thread_create_pro(nullptr),_thread_open_pro(nullptr)
+    ,_active_item(nullptr),_right_btn_item(nullptr)
+    ,_selecetd_item(nullptr),_load_controller(new AlbumLoadController(this))
     ,_only_favorites(false)
     ,_action_detect_dup(nullptr),_action_toggle_fav(nullptr)
 {
@@ -151,6 +137,10 @@ ProTreeWidget::ProTreeWidget(QWidget *parent): QTreeWidget(parent)
     connect(_action_slideshow,&QAction::triggered,this,&ProTreeWidget::SlotSlideShow);
     connect(_action_detect_dup,&QAction::triggered,this,&ProTreeWidget::SlotDetectDuplicates);
     connect(_action_toggle_fav,&QAction::triggered,this,&ProTreeWidget::SlotToggleFavorite);
+    connect(_load_controller, &AlbumLoadController::AlbumOpened,
+            this, &ProTreeWidget::OnAlbumOpened);
+    connect(_load_controller, &AlbumLoadController::ImportCompleted,
+            this, &ProTreeWidget::OnImportCompleted);
     _action_trash_photo = new QAction(tr("删除图片／素材（移到回收站）"), this);
     _action_trash_photo->setObjectName("treeTrashPhotoAction");
     connect(_action_trash_photo, &QAction::triggered, this, [this]() {
@@ -334,60 +324,26 @@ void ProTreeWidget::SlotDoubleClickItem(QTreeWidgetItem *doubleItem, int col)
 
 void ProTreeWidget::SlotImport()
 {
-    if (!_right_btn_item)
-    {
-        qDebug() << "_right_btn_item is empty!";
-        return;
-    }
-    auto *target_pro_item = dynamic_cast<ProTreeItem*>(_right_btn_item);
-    if (!target_pro_item) return;
-    const QString path = target_pro_item->GetPath();
+    auto *requestedRoot = dynamic_cast<ProTreeItem*>(_right_btn_item);
+    if (!requestedRoot || requestedRoot->type() != TreeItemPro) return;
+    const QString path = requestedRoot->GetPath();
     const auto selection = SelectAlbumFolder(
         this, tr("导入照片 — 选中来源文件夹后确认，或进入目录后选择当前文件夹"), path);
     if (!selection.error.isEmpty())
         QMessageBox::warning(this, tr("导入文件"), selection.error);
     if (selection.path.isEmpty()) return;
-    const QString import_path = selection.path;
-
-    // 防御性校验：若用户选择了相册自身或其内部子目录作为导入源，直接提示并拦截
-    QString cleanImport = QFileInfo(import_path).canonicalFilePath();
-    if (cleanImport.isEmpty()) cleanImport = QDir::cleanPath(import_path);
-    QString cleanAlbum = QFileInfo(path).canonicalFilePath();
-    if (cleanAlbum.isEmpty()) cleanAlbum = QDir::cleanPath(path);
-
-#ifdef Q_OS_WIN
-    const auto cs = Qt::CaseInsensitive;
-#else
-    const auto cs = Qt::CaseSensitive;
-#endif
-
-    if (cleanImport.compare(cleanAlbum, cs) == 0 ||
-        cleanImport.startsWith(cleanAlbum + "/", cs) ||
-        cleanImport.startsWith(cleanAlbum + "\\", cs))
-    {
-        QMessageBox::information(this, tr("导入文件"), tr("不能选择相册目录自身或相册内部子目录作为导入源。"));
-        return;
+    // The folder picker has a modal event loop; resolve the node again.
+    ProTreeItem *album = nullptr;
+    for (int i = 0; i < topLevelItemCount(); ++i) {
+        auto *candidate = dynamic_cast<ProTreeItem*>(topLevelItem(i));
+        if (candidate && candidate->GetPath() == path) {
+            album = candidate;
+            break;
+        }
     }
-
-    int file_count = 0;
-
-    // 进度监控机制（关闭 autoClose/autoReset 防止进度取模回零或满值时误触发 canceled 信号）
-    _dialog_progress = new QProgressDialog(this);
-    _dialog_progress->setAutoClose(false);
-    _dialog_progress->setAutoReset(false);
-
-    // 线程：按值/安全指针传入参数，避免局部变量引用悬垂
-    _thread_create_pro = std::make_shared<ProTreeThread>(
-        import_path, path, target_pro_item, file_count, this, target_pro_item, nullptr);
-    connect(_thread_create_pro.get(), &ProTreeThread::SigUpdateProgress, this, &ProTreeWidget::SlotUpdateProgress);
-    connect(_thread_create_pro.get(), &ProTreeThread::SigFinishProgress, this, &ProTreeWidget::SlotFinishProgress);
-    connect(_dialog_progress, &QProgressDialog::canceled, this, &ProTreeWidget::SlotCancelProgress);
-    connect(this, &ProTreeWidget::SigCancelProgress, _thread_create_pro.get(), &ProTreeThread::SlotCanceled);
-    _thread_create_pro->start();
-    _dialog_progress->setWindowTitle("Please wait...");
-    _dialog_progress->setFixedWidth(PROGRESS_WIDTH);
-    _dialog_progress->setRange(0, PROGRESS_WIDTH);
-    _dialog_progress->exec();
+    QString error;
+    if (!_load_controller->Import(selection.path, album, &error) && !error.isEmpty())
+        QMessageBox::warning(this, tr("导入文件"), error);
 }
 
 void ProTreeWidget::SlotSetAvtive()
@@ -415,14 +371,13 @@ void ProTreeWidget::SlotColsePro()
         return;
     }
 
-    // 导入线程析构时会回滚本次已复制文件，关闭项目不能触发这条数据删除路径。
-    // 等导入完成后再允许关闭，避免项目关闭与后台导入竞态导致永久删除。
-    if (_thread_create_pro)
+    // Workers may still refer to a root, and import cancellation must roll back.
+    if (_load_controller->IsBusy())
     {
         QMessageBox::information(
             this,
             tr("无法关闭相册"),
-            tr("当前仍有图片正在导入，请等待导入完成后再关闭相册。"));
+            tr("相册正在打开或导入，请等待任务结束后再关闭。"));
         return;
     }
 
@@ -507,16 +462,7 @@ void ProTreeWidget::SlotColsePro()
         _active_item=nullptr;
     }
 
-    // 2. 打开相册的扫描线程只拥有临时树节点，不删除磁盘文件。
-    if (_thread_open_pro && _thread_open_pro->GetRoot() == _right_btn_item)
-    {
-        disconnect(_thread_open_pro.get(), nullptr, this, nullptr);
-        _thread_open_pro->SlotCanceled();
-        _thread_open_pro->wait();
-        _thread_open_pro.reset();
-    }
-
-    // 3. 严格校验有效索引后从树控件中移除，并通过 QTimer::singleShot 延后释放堆对象，
+    // 严格校验有效索引后从树控件中移除，并通过 QTimer::singleShot 延后释放堆对象，
     // 坚决杜绝在 QTreeWidget::mousePressEvent 调用栈未退出时同步释放树节点导致的 0xc0000374 堆破坏与异常终止！
     if (index_right_btn >= 0)
     {
@@ -533,185 +479,67 @@ void ProTreeWidget::SlotColsePro()
     ApplyTreeFilter();
     SaveWorkspaceSettings();
 }
-void ProTreeWidget::SlotUpdateProgress(int count)
+void ProTreeWidget::OnImportCompleted()
 {
-    if(!_dialog_progress)
-    {
-        return;
-    }
-    if(count>=PROGRESS_MAX)
-    {
-        _dialog_progress->setValue(count%PROGRESS_MAX);
-    }
-    else
-    {
-        _dialog_progress->setValue(count);
-    }
-}
-
-void ProTreeWidget::SlotFinishProgress()
-{
-    if (_thread_create_pro)
-    {
-        _thread_create_pro->CommitToTree();
-    }
-    if (_dialog_progress)
-    {
-        disconnect(_dialog_progress, &QProgressDialog::canceled, this, &ProTreeWidget::SlotCancelProgress);
-        _dialog_progress->setValue(PROGRESS_MAX);
-        _dialog_progress->accept();
-        _dialog_progress->deleteLater();
-        _dialog_progress = nullptr;
-    }
-    for (int i = 0; i < this->topLevelItemCount(); ++i)
-    {
-        RefreshItemFavoriteDisplay(this->topLevelItem(i));
-    }
+    for (int i = 0; i < topLevelItemCount(); ++i)
+        RefreshItemFavoriteDisplay(topLevelItem(i));
     ApplyTreeFilter();
-
-    // 导入完成后，若当前画布尚未展示任何图片，自动选中并展示首张可见图片
-    if (!_selecetd_item)
-    {
-        for (int i = 0; i < this->topLevelItemCount(); ++i)
-        {
-            auto *topPro = dynamic_cast<ProTreeItem*>(this->topLevelItem(i));
+    if (!_selecetd_item) {
+        for (int i = 0; i < topLevelItemCount(); ++i) {
+            auto *topPro = dynamic_cast<ProTreeItem*>(topLevelItem(i));
             ProTreeItem *firstPic = topPro ? topPro->GetFirstPicChild() : nullptr;
-            while (firstPic && firstPic->isHidden())
-            {
-                firstPic = firstPic->GetNextItem();
-            }
-            if (firstPic)
-            {
+            while (firstPic && firstPic->isHidden()) firstPic = firstPic->GetNextItem();
+            if (firstPic) {
                 _selecetd_item = firstPic;
-                this->setCurrentItem(firstPic);
+                setCurrentItem(firstPic);
                 emit SigUpdateSelected(firstPic->GetPath());
                 break;
             }
         }
     }
-
     SaveWorkspaceSettings();
-    _thread_create_pro.reset();
 }
 
-void ProTreeWidget::SlotCancelProgress()
+void ProTreeWidget::OnAlbumOpened(QTreeWidgetItem *root)
 {
-    // 取消追加导入时，仅通知后台导入线程中止并回滚本次新建文件，保留原有相册项目与数据
-    if (_thread_create_pro)
-    {
-        disconnect(_thread_create_pro.get(), &ProTreeThread::SigUpdateProgress, this, &ProTreeWidget::SlotUpdateProgress);
-        disconnect(_thread_create_pro.get(), &ProTreeThread::SigFinishProgress, this, &ProTreeWidget::SlotFinishProgress);
-    }
-    emit SigCancelProgress();
-    _thread_create_pro.reset();
-    if (_dialog_progress)
-    {
-        disconnect(_dialog_progress, &QProgressDialog::canceled, this, &ProTreeWidget::SlotCancelProgress);
-        _dialog_progress->deleteLater();
-        _dialog_progress = nullptr;
-    }
-}
-
-void ProTreeWidget::SlotUpOpenProgress(int count)
-{
-    if(!_open_progressdlg)
-    {
-        return;
-    }
-    if(count>=PROGRESS_MAX)
-    {
-        _open_progressdlg->setValue(count%PROGRESS_MAX);
-    }
-    else
-    {
-        _open_progressdlg->setValue(count);
-    }
-}
-
-void ProTreeWidget::SlotFinishOpenProgress()
-{
-    ProTreeItem *openedRoot = nullptr;
-    if (_thread_open_pro)
-    {
-        _thread_open_pro->CommitToTree();
-        openedRoot = dynamic_cast<ProTreeItem*>(_thread_open_pro->GetRoot());
-        if (openedRoot && openedRoot->GetPath() == _restoring_active_path)
-        {
-            if (_active_item)
-            {
-                QFont font = _active_item->font(0);
-                font.setBold(false);
-                _active_item->setFont(0, font);
-            }
-            _active_item = openedRoot;
-            QFont font = openedRoot->font(0);
-            font.setBold(true);
-            openedRoot->setFont(0, font);
-            _restoring_active_path.clear();
+    auto *openedRoot = dynamic_cast<ProTreeItem*>(root);
+    if (!openedRoot) return;
+    _set_path.insert(openedRoot->GetPath());
+    if (!_restoring_active_path.isEmpty()
+        && MaterialPathsEqual(MaterialCanonicalPath(openedRoot->GetPath()),
+                              MaterialCanonicalPath(_restoring_active_path))) {
+        if (_active_item) {
+            QFont font = _active_item->font(0);
+            font.setBold(false);
+            _active_item->setFont(0, font);
         }
-        if (!_active_item && _thread_open_pro->GetRoot())
-        {
-            _active_item = _thread_open_pro->GetRoot();
-            QFont boldFont;
-            boldFont.setBold(true);
-            _active_item->setFont(0, boldFont);
-        }
+        _active_item = openedRoot;
+        QFont font = openedRoot->font(0);
+        font.setBold(true);
+        openedRoot->setFont(0, font);
+        _restoring_active_path.clear();
     }
-    if (_open_progressdlg)
-    {
-        disconnect(_open_progressdlg, &QProgressDialog::canceled, this, &ProTreeWidget::SlotCancelOpenProgress);
-        _open_progressdlg->setValue(PROGRESS_MAX);
-        _open_progressdlg->accept();
-        _open_progressdlg->deleteLater();
-        _open_progressdlg = nullptr;
+    if (!_active_item) {
+        _active_item = openedRoot;
+        QFont font = openedRoot->font(0);
+        font.setBold(true);
+        openedRoot->setFont(0, font);
     }
-    for (int i = 0; i < this->topLevelItemCount(); ++i)
-    {
-        RefreshItemFavoriteDisplay(this->topLevelItem(i));
-    }
+    for (int i = 0; i < topLevelItemCount(); ++i)
+        RefreshItemFavoriteDisplay(topLevelItem(i));
     ApplyTreeFilter();
-
-    // Opening an album must move the current album even if another photo is
-    // already selected; the gallery derives its scope from currentItem().
-    if (openedRoot) this->setCurrentItem(openedRoot);
-
-    // 打开相册后，若当前画布尚未展示任何图片，自动选中并展示该相册的第一张可见照片
-    if (!_selecetd_item && openedRoot)
-    {
+    setCurrentItem(openedRoot);
+    if (!_selecetd_item) {
         ProTreeItem *firstPic = openedRoot->GetFirstPicChild();
-        while (firstPic && firstPic->isHidden())
-        {
-            firstPic = firstPic->GetNextItem();
-        }
-        if (firstPic && firstPic->GetRoot() == openedRoot)
-        {
+        while (firstPic && firstPic->isHidden()) firstPic = firstPic->GetNextItem();
+        if (firstPic && firstPic->GetRoot() == openedRoot) {
             _selecetd_item = firstPic;
-            this->setCurrentItem(firstPic);
+            setCurrentItem(firstPic);
             emit SigUpdateSelected(firstPic->GetPath());
         }
     }
-
     SaveWorkspaceSettings();
-    _thread_open_pro.reset();
-    if (openedRoot) emit SigAlbumOpened(openedRoot->GetPath());
-}
-
-void ProTreeWidget::SlotCancelOpenProgress()
-{
-    if (_thread_open_pro)
-    {
-        disconnect(_thread_open_pro.get(), &OpenTreeThread::SigUpdataProGress, this, &ProTreeWidget::SlotUpOpenProgress);
-        disconnect(_thread_open_pro.get(), &OpenTreeThread::SigFinishProGress, this, &ProTreeWidget::SlotFinishOpenProgress);
-        _set_path.remove(_thread_open_pro->GetSrcPath());
-    }
-    emit SigCancelOpenProgress();
-    _thread_open_pro.reset();
-    if (_open_progressdlg)
-    {
-        disconnect(_open_progressdlg, &QProgressDialog::canceled, this, &ProTreeWidget::SlotCancelOpenProgress);
-        _open_progressdlg->deleteLater();
-        _open_progressdlg = nullptr;
-    }
+    emit SigAlbumOpened(openedRoot->GetPath());
 }
 
 void ProTreeWidget::SlotSlideShow()
@@ -751,44 +579,10 @@ void ProTreeWidget::SlotSlideShow()
 
 void ProTreeWidget::SlotOpenPro(const QString &path)
 {
-    if (!_set_path.contains(path) && !_pending_open_paths.contains(path))
-    {
-        _pending_open_paths.append(path);
-    }
-    // exec() processes timers and can reenter this slot during workspace restoration.
-    // Keep ownership of the current task until its modal loop has returned.
-    if (_opening_projects) return;
-    QScopedValueRollback<bool> openingGuard(_opening_projects, true);
-    while (!_pending_open_paths.isEmpty())
-    {
-    const QString path = _pending_open_paths.takeFirst();
-    //避免重复打开
-    if(_set_path.find(path)!=_set_path.end())
-    {
-        continue;
-    }
-    _set_path.insert(path);
-    int file_count=0;
-    QDir pro_dir(path);
-    QString proname=pro_dir.dirName();
-
-    _open_progressdlg=new QProgressDialog(this);
-    _open_progressdlg->setAutoClose(false);
-    _open_progressdlg->setAutoReset(false);
-    _thread_open_pro=std::make_shared<OpenTreeThread>(path,file_count,this,nullptr);
-    connect(_thread_open_pro.get(),&OpenTreeThread::SigUpdataProGress,this,&ProTreeWidget::SlotUpOpenProgress);
-    connect(_thread_open_pro.get(),&OpenTreeThread::SigFinishProGress,this,&ProTreeWidget::SlotFinishOpenProgress);
-    connect(_open_progressdlg,&QProgressDialog::canceled,this,&ProTreeWidget::SlotCancelOpenProgress);
-    connect(this,&ProTreeWidget::SigCancelOpenProgress,_thread_open_pro.get(),&OpenTreeThread::SlotCanceled);
-    _thread_open_pro->start();
-    _open_progressdlg->setWindowTitle("Please wait...");
-    _open_progressdlg->setFixedWidth(PROGRESS_WIDTH);
-    _open_progressdlg->setRange(0,PROGRESS_WIDTH);
-    _open_progressdlg->exec();
-    }
+    _load_controller->Open(path);
 }
 
-// 响应 PicShow 界面点击“下一张”按钮的槽函数
+// Respond to the editor next-photo action.
 void ProTreeWidget::SlotNextShow()
 {
     if(!_selecetd_item)
@@ -978,7 +772,7 @@ bool ProTreeWidget::TrashPath(const QString &path, bool folder, QString *error)
 {
     if (error) error->clear();
     const auto fail = [&](const QString &message) { if (error) *error = message; return false; };
-    if (_opening_projects || _thread_open_pro || _thread_create_pro
+    if (_load_controller->IsBusy()
         || (_slide_show_dlg && _slide_show_dlg->isVisible()))
         return fail(tr("相册正在加载、导入或轮播，请结束后再删除。"));
     const QString absolute = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
@@ -1062,7 +856,7 @@ bool ProTreeWidget::RegisterMaterial(const QString &albumRoot, const QString &sa
     if (registeredPath) registeredPath->clear();
     if (error) error->clear();
     const auto fail = [&](const QString &message) { if (error) *error = message; return false; };
-    if (_opening_projects || _thread_create_pro || _thread_open_pro)
+    if (_load_controller->IsBusy())
         return fail(tr("相册正在加载或导入，请完成后再加入素材。"));
     if (albumRoot.isEmpty() || !QFileInfo(albumRoot).isDir())
         return fail(tr("目标相册目录不存在。"));
@@ -1076,37 +870,9 @@ bool ProTreeWidget::RegisterMaterial(const QString &albumRoot, const QString &sa
         }
     }
     if (!root) return fail(tr("目标相册已经关闭，请重新打开后加入素材。"));
-    QImageReader reader(savedPath);
-    if (!QFileInfo(savedPath).isFile() || !reader.canRead())
-        return fail(tr("保存的素材不存在或不是可读取的图片。"));
-    QString target = MaterialCanonicalPath(savedPath);
-    if (!MaterialInsideAlbum(target, canonicalRoot)) {
-        const QString folder = QDir(root->GetPath()).filePath(tr("素材"));
-        if (!QDir().mkpath(folder) || !MaterialInsideAlbum(MaterialCanonicalPath(folder), canonicalRoot))
-            return fail(tr("无法在当前相册内创建素材目录。"));
-        const QFileInfo source(savedPath);
-        const QByteArray sourceHash = MaterialFileHash(savedPath);
-        if (sourceHash.isEmpty()) return fail(tr("无法读取素材文件。"));
-        for (int number = 0; ; ++number) {
-            const QString name = source.completeBaseName()
-                + (number ? QString("_%1").arg(number, 3, 10, QLatin1Char('0')) : QString())
-                + "." + source.suffix();
-            const QString candidate = QDir(folder).filePath(name);
-            if (QFileInfo::exists(candidate)) {
-                // 相同素材再次登记复用原副本，不覆盖不同内容的同名文件。
-                if (!QFileInfo(candidate).isSymLink() && QFileInfo(candidate).isFile()
-                    && MaterialInsideAlbum(MaterialCanonicalPath(candidate), canonicalRoot)
-                    && MaterialFileHash(candidate) == sourceHash) {
-                    target = MaterialCanonicalPath(candidate);
-                    break;
-                }
-                continue;
-            }
-            if (!QFile::copy(savedPath, candidate)) return fail(tr("素材已保存，但无法复制到相册目录。"));
-            target = MaterialCanonicalPath(candidate);
-            break;
-        }
-    }
+    const auto prepared = MaterialImportService::prepare(savedPath, root->GetPath());
+    if (!prepared.success) return fail(prepared.error);
+    const QString target = prepared.albumPath;
     // 同一路径去重也要恢复显示，不能只在新建节点时恢复隐藏目录。
     for (QString parentPath = QFileInfo(target).absolutePath(); MaterialInsideAlbum(parentPath, canonicalRoot);
          parentPath = QFileInfo(parentPath).absolutePath())
@@ -1361,200 +1127,31 @@ void ProTreeWidget::SlotDetectDuplicates()
 
     QGuiApplication::setOverrideCursor(Qt::WaitCursor);
 
-    struct PicHashNode {
-        ProTreeItem *item;
-        QString path;
-        quint64 hash;
-    };
-    QVector<PicHashNode> nodes;
-    nodes.reserve(picItems.size());
-
-    for (ProTreeItem *it : picItems)
-    {
-        QString p = it->GetPath();
-        if (QFileInfo::exists(p))
-        {
-            nodes.push_back({it, p, DuplicatePhotoFinder::ComputeDHash(p)});
-        }
-    }
-
-    struct DupPair {
-        PicHashNode keepNode;
-        PicHashNode dupNode;
-        int hammingDist;
-        double similarity;
-    };
-    QVector<DupPair> dupPairs;
     QVector<DuplicatePhotoFinder::PhotoHash> fingerprints;
-    for (const auto &node : nodes)
-        fingerprints.append({node.path, QString::number(reinterpret_cast<quintptr>(node.item->GetRoot())), node.hash});
+    fingerprints.reserve(picItems.size());
+    for (const auto *item : picItems) {
+        const QString path = item->GetPath();
+        if (QFileInfo::exists(path))
+            fingerprints.append({path, QString::number(reinterpret_cast<quintptr>(item->GetRoot())),
+                                 DuplicatePhotoFinder::ComputeDHash(path)});
+    }
     const int kHammingThreshold = 10;
     const auto matches = DuplicatePhotoFinder::FindMatches(fingerprints, kHammingThreshold);
-    for (const auto &match : matches)
-        dupPairs.append({nodes[match.keepIndex], nodes[match.duplicateIndex],
-                         match.distance, match.similarity});
 
     QGuiApplication::restoreOverrideCursor();
 
-    if (dupPairs.isEmpty())
+    if (matches.isEmpty())
     {
         QMessageBox::information(this, tr("感知哈希 (dHash) 扫描完成"),
                                  tr("已扫描 %1 张照片的 64-bit 差异感知哈希指纹：\n\n未检测到重复或高度相似的照片（汉明距离阈值 ≤ %2）。")
-                                     .arg(nodes.size())
+                                     .arg(fingerprints.size())
                                      .arg(kHammingThreshold));
         return;
     }
 
-    // 弹出相似/重复照片可视化比对与清理对话框
-    QDialog dlg(this);
-    dlg.setWindowTitle(tr("🧹 感知哈希 (dHash) 相似/重复照片智能检测报告"));
-    dlg.resize(720, 480);
-    dlg.setStyleSheet("QDialog { background-color: rgb(43,45,48); color: rgb(230,233,238); }");
-
-    QVBoxLayout *mainLayout = new QVBoxLayout(&dlg);
-    QLabel *summaryLbl = new QLabel(
-        tr("共提取 <b>%1</b> 张图像的 64-bit dHash 特征指纹，发现 <b>%2</b> 组重复/相似照片（勾选代表待清理的冗余副本）：")
-            .arg(nodes.size())
-            .arg(dupPairs.size()), &dlg);
-    summaryLbl->setStyleSheet("color: rgb(225,228,235); font-size: 13px; padding: 4px;");
-    mainLayout->addWidget(summaryLbl);
-
-    QListWidget *listWid = new QListWidget(&dlg);
-    listWid->setIconSize(QSize(72, 72));
-    listWid->setSpacing(6);
-    listWid->setStyleSheet(
-        "QListWidget { background-color: rgb(54,56,60); color: rgb(230,233,238); border: 1px solid rgb(85,88,94); border-radius: 5px; }"
-        "QListWidget::item { padding: 6px; border-bottom: 1px solid rgb(70,73,78); }");
-
-    for (int i = 0; i < dupPairs.size(); ++i)
-    {
-        const auto &pair = dupPairs[i];
-        QFileInfo fiKeep(pair.keepNode.path);
-        QFileInfo fiDup(pair.dupNode.path);
-
-        QString text = QString(
-            "【相似组 #%1】 相似度: %2%  (汉明距离: %3 / 64)\n"
-            "  ├─ 保留基准: %4  [dHash: 0x%5]\n"
-            "  └─ 待清副本: %6  [dHash: 0x%7]  (%8)")
-            .arg(i + 1)
-            .arg(pair.similarity, 0, 'f', 1)
-            .arg(pair.hammingDist)
-            .arg(fiKeep.fileName())
-            .arg(pair.keepNode.hash, 16, 16, QChar('0'))
-            .arg(fiDup.fileName())
-            .arg(pair.dupNode.hash, 16, 16, QChar('0'))
-            .arg(fiDup.absoluteFilePath());
-
-        QPixmap thumb(pair.dupNode.path);
-        QListWidgetItem *lItem = new QListWidgetItem(
-            QIcon(thumb.scaled(72, 72, Qt::KeepAspectRatio, Qt::SmoothTransformation)),
-            text, listWid);
-        lItem->setFlags(lItem->flags() | Qt::ItemIsUserCheckable);
-        lItem->setCheckState(Qt::Checked);
-        lItem->setData(Qt::UserRole, i);
-    }
-    mainLayout->addWidget(listWid, 1);
-
-    QHBoxLayout *btnLayout = new QHBoxLayout();
-    btnLayout->addStretch();
-    QPushButton *btnClean = new QPushButton(tr("一键清理勾选的相似副本"), &dlg);
-    btnClean->setIcon(QIcon(":/icon/line/remove.svg"));
-    btnClean->setIconSize(QSize(20, 20));
-    btnClean->setObjectName("canvasToolBtn");
-    btnClean->setMinimumHeight(32);
-    QPushButton *btnClose = new QPushButton(tr("关闭"), &dlg);
-    btnClose->setObjectName("canvasToolBtn");
-    btnClose->setMinimumHeight(32);
-    btnLayout->addWidget(btnClean);
-    btnLayout->addWidget(btnClose);
-    mainLayout->addLayout(btnLayout);
-
-    connect(btnClose, &QPushButton::clicked, &dlg, &QDialog::reject);
-    connect(btnClean, &QPushButton::clicked, &dlg, [&]() {
-        int checkedCount = 0;
-        for (int row = 0; row < listWid->count(); ++row)
-        {
-            if (listWid->item(row)->checkState() == Qt::Checked)
-            {
-                ++checkedCount;
-            }
-        }
-        if (checkedCount == 0)
-        {
-            QMessageBox::information(&dlg, tr("提示"), tr("请先勾选需要清理的相似副本照片。"));
-            return;
-        }
-        auto reply = QMessageBox::question(
-            &dlg,
-            tr("确认清理冗余副本"),
-            tr("确定要从相册及磁盘中永久删除勾选的 %1 张相似副本照片吗？").arg(checkedCount),
-            QMessageBox::Yes | QMessageBox::No,
-            QMessageBox::No);
-        if (reply != QMessageBox::Yes)
-        {
-            return;
-        }
-
-        int removedCount = 0;
-        QStringList failedPaths;
-        for (int row = 0; row < listWid->count(); ++row)
-        {
-            QListWidgetItem *li = listWid->item(row);
-            if (li->checkState() != Qt::Checked) continue;
-
-            int pairIdx = li->data(Qt::UserRole).toInt();
-            ProTreeItem *dupItem = dupPairs[pairIdx].dupNode.item;
-            QString dupPath = dupPairs[pairIdx].dupNode.path;
-            if (!dupItem) continue;
-
-            // Keep the tree, selection, links and favorites intact if disk deletion fails.
-            QFile duplicateFile(dupPath);
-            if (!duplicateFile.remove())
-            {
-                failedPaths.append(tr("%1：%2").arg(QDir::toNativeSeparators(dupPath), duplicateFile.errorString()));
-                continue;
-            }
-
-            // 1. 维护双向链表前后指针不断链
-            ProTreeItem *pre = dupItem->GetPreItem();
-            ProTreeItem *next = dupItem->GetNextItem();
-            if (pre) pre->SetNextItem(next);
-            if (next) next->SetPreItem(pre);
-
-            if (_selecetd_item == dupItem)
-            {
-                _selecetd_item = pre ? pre : next;
-                emit SigUpdatePic(_selecetd_item ? dynamic_cast<ProTreeItem*>(_selecetd_item)->GetPath() : "");
-            }
-
-            // 2. 从树节点中移除并删除磁盘冗余文件
-            if (dupItem->parent())
-            {
-                dupItem->parent()->removeChild(dupItem);
-            }
-            delete dupItem;
-            _favorite_paths.remove(dupPath);
-            ++removedCount;
-        }
-        ApplyTreeFilter();
-        SaveWorkspaceSettings();
-        if (failedPaths.isEmpty())
-        {
-            QMessageBox::information(&dlg, tr("清理完成"), tr("已成功清理 %1 张相似/重复冗余照片！").arg(removedCount));
-        }
-        else
-        {
-            QMessageBox::warning(&dlg, tr("部分文件未能清理"),
-                tr("成功清理 %1 张，失败 %2 张。失败图片的相册记录已保留。\n\n%3")
-                    .arg(removedCount).arg(failedPaths.size()).arg(failedPaths.join("\n")));
-        }
-        dlg.accept();
-    });
-
-    dlg.exec();
+    DuplicateReviewDialog dialog(fingerprints, matches, this);
+    if (dialog.exec() == QDialog::Accepted) emit SigDeletePhotosRequested(dialog.SelectedPaths());
 }
-
-
 
 
 bool ProTreeWidget::IsMusicPlaying() const { return _music->IsMusicPlaying(); }

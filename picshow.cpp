@@ -1,3 +1,4 @@
+#include "photoadjustmentpanel.h"
 #include "picshow.h"
 #include "ui_picshow.h"
 #include "cropdialog.h"
@@ -6,10 +7,6 @@
 #include <QInputDialog>
 #include <QGraphicsOpacityEffect>
 #include <QPropertyAnimation>
-#include <QPainter>
-#include <QPainterPath>
-#include <QWheelEvent>
-#include <QMouseEvent>
 #include <QKeyEvent>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -21,12 +18,8 @@
 #include <QProcess>
 #include <QDesktopServices>
 #include <QUrl>
-#include <QTransform>
-#include <QSlider>
-#include <QSignalBlocker>
 #include <QUndoCommand>
 #include <QAction>
-#include <QComboBox>
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QtMath>
@@ -50,31 +43,16 @@ PicShow::PicShow(QWidget *parent)
     : QDialog(parent)
     , ui(new Ui::PicShow)
     , _b_btnvisible(false)
-    , _zoom_factor(1.0)
-    , _is_actual_pixel(false)
-    , _pan_offset(0.0, 0.0)
-    , _is_dragging(false)
     , _toolbar_wid(nullptr)
     , _btn_zoom_reset(nullptr)
     , _info_panel(nullptr)
     , _histogram_wid(nullptr)
-    , _slider_bright(nullptr)
-    , _slider_contrast(nullptr)
-    , _slider_sat(nullptr)
-    , _lbl_bright_val(nullptr)
-    , _lbl_contrast_val(nullptr)
-    , _lbl_sat_val(nullptr)
-    , _combo_filter(nullptr)
 {
     ui->setupUi(this);
     _undo_stack = new QUndoStack(this);
     _undo_stack->setObjectName("photoUndoStack");
 
-    // 核心优化：为 label 安装事件过滤器，拦截其 Paint / 滚轮 / 鼠标拖拽事件进行自主交互绘制
-    // 彻底解决 QLabel::setPixmap 污染 sizeHint 导致窗口无法缩小以及布局挤压裁切图片的问题
-    ui->label->installEventFilter(this);
-    ui->label->setMouseTracking(true);
-
+    connect(ui->label, &PhotoCanvas::SigFocusRequested, this, [this]() { setFocus(); });
     // 初始化上一张/下一张按钮的图标（常规状态、悬停状态、按下状态）
     ui->previousBtn->SetIcons(":/icon/line/previous.svg",
                               ":/icon/line/previous_hover.svg",
@@ -109,6 +87,7 @@ PicShow::PicShow(QWidget *parent)
 
     // 构建底部专业画布工具栏与右侧直方图/元数据/算法工坊侧边栏
     InitStudioUI();
+    connect(ui->label, &PhotoCanvas::SigZoomTextChanged, _btn_zoom_reset, &QPushButton::setText);
 }
 
 PicShow::~PicShow()
@@ -222,61 +201,15 @@ void PicShow::InitStudioUI()
     sep1->setStyleSheet("color: rgb(75, 78, 82);");
     infoLayout->addWidget(sep1);
 
-    // ===== 数字图像算法工坊区块 =====
-    QLabel *titleAlgo = new QLabel(tr("🎨 数字图像算法工坊"), _info_panel);
-    titleAlgo->setObjectName("inspectorSectionTitle");
-    infoLayout->addWidget(titleAlgo);
-
-    QHBoxLayout *filterRow = new QHBoxLayout();
-    QLabel *lblFilter = new QLabel(tr("算子滤镜:"), _info_panel);
-    lblFilter->setStyleSheet("color: rgb(175, 180, 188); font-size: 12px;");
-    _combo_filter = new QComboBox(_info_panel);
-    _combo_filter->setObjectName("studioCombo");
-    _combo_filter->addItem(tr("原图 (无算子)"), ImageProcessor::FilterNone);
-    _combo_filter->addItem(tr("加权灰度化 (Grayscale)"), ImageProcessor::FilterGrayscale);
-    _combo_filter->addItem(tr("复古怀旧矩阵 (Sepia)"), ImageProcessor::FilterSepia);
-    _combo_filter->addItem(tr("反色负片 (Invert)"), ImageProcessor::FilterInvert);
-    _combo_filter->addItem(tr("高斯平滑滤波 (3×3 Gaussian)"), ImageProcessor::FilterGaussianBlur);
-    _combo_filter->addItem(tr("拉普拉斯锐化 (Laplacian)"), ImageProcessor::FilterLaplacianSharpen);
-    _combo_filter->addItem(tr("Sobel 梯度边缘检测"), ImageProcessor::FilterSobelEdge);
-    _combo_filter->addItem(tr("浮雕卷积特征 (Emboss)"), ImageProcessor::FilterEmboss);
-    filterRow->addWidget(lblFilter);
-    filterRow->addWidget(_combo_filter, 1);
-    infoLayout->addLayout(filterRow);
-
-    QGridLayout *sliderGrid = new QGridLayout();
-    sliderGrid->setHorizontalSpacing(6);
-    sliderGrid->setVerticalSpacing(4);
-
-    auto addSliderRow = [&](int row, const QString &name, QSlider* &slider, QLabel* &valLbl) {
-        QLabel *lbl = new QLabel(name, _info_panel);
-        lbl->setStyleSheet("color: rgb(175, 180, 188); font-size: 12px;");
-        slider = new QSlider(Qt::Horizontal, _info_panel);
-        slider->setRange(-100, 100);
-        slider->setValue(0);
-        valLbl = new QLabel("0", _info_panel);
-        valLbl->setFixedWidth(28);
-        valLbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        valLbl->setStyleSheet("color: rgb(220, 224, 230); font-size: 11px;");
-        sliderGrid->addWidget(lbl, row, 0);
-        sliderGrid->addWidget(slider, row, 1);
-        sliderGrid->addWidget(valLbl, row, 2);
-        connect(slider, &QSlider::valueChanged, this, &PicShow::SlotAdjustParamsChanged);
-        connect(slider, &QSlider::sliderPressed, this, [this]() {
-            FinishParameterDrag();
-            _drag_start_state = _document.state();
-            _parameter_dragging = true;
-        });
-        connect(slider, &QSlider::sliderReleased, this, &PicShow::FinishParameterDrag);
-    };
-
-    addSliderRow(0, tr("亮度:"), _slider_bright, _lbl_bright_val);
-    addSliderRow(1, tr("对比度:"), _slider_contrast, _lbl_contrast_val);
-    addSliderRow(2, tr("饱和度:"), _slider_sat, _lbl_sat_val);
-    infoLayout->addLayout(sliderGrid);
-
-    connect(_combo_filter, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &PicShow::SlotAdjustParamsChanged);
+    _adjustments = new PhotoAdjustmentPanel(_info_panel);
+    infoLayout->addWidget(_adjustments);
+    connect(_adjustments, &PhotoAdjustmentPanel::SigParametersChanged, this, &PicShow::SlotAdjustParamsChanged);
+    connect(_adjustments, &PhotoAdjustmentPanel::SigGestureStarted, this, [this]() {
+        FinishParameterDrag();
+        _drag_start_state = _document.state();
+        _parameter_dragging = true;
+    });
+    connect(_adjustments, &PhotoAdjustmentPanel::SigGestureFinished, this, &PicShow::FinishParameterDrag);
 
     QHBoxLayout *algoBtnRow = new QHBoxLayout();
     algoBtnRow->setSpacing(6);
@@ -398,32 +331,25 @@ void PicShow::InitStudioUI()
 
 void PicShow::ResetViewFit()
 {
-    _zoom_factor = 1.0;
-    _is_actual_pixel = false;
-    _pan_offset = QPointF(0.0, 0.0);
-    if (_btn_zoom_reset)
-    {
-        _btn_zoom_reset->setText("100% 自适应");
-    }
+    ui->label->ResetViewFit();
 }
 
 void PicShow::RebuildTransformedPixmap()
 {
     if (_document.sourceImage().isNull())
     {
-        Original_map = QPixmap();
+        ui->label->SetFrame({}, {}, {}, false, 0);
         _histogram_wid->ClearHistogram();
         UpdateImageMetadata();
         ReloadPic();
         return;
     }
 
-    const bool dragging = (_slider_bright && _slider_bright->isSliderDown()) ||
-                          (_slider_contrast && _slider_contrast->isSliderDown()) ||
-                          (_slider_sat && _slider_sat->isSliderDown());
+    const bool dragging = _adjustments->IsSliderDown();
     const QImage transformed = _document.Render(dragging ? 1600 : 0);
 
-    Original_map = QPixmap::fromImage(transformed);
+    ui->label->SetFrame(_document.sourceImage(), transformed, _document.outputSize(),
+                        _document.isModified(), _document.state().rotation);
     _histogram_wid->UpdateHistogram(transformed);
     UpdateImageMetadata();
     ReloadPic();
@@ -467,7 +393,8 @@ void PicShow::UpdateImageMetadata()
                                  .arg(_document.sourceImage().hasAlphaChannel() ? "RGBA" : "RGB"));
 
     // 计算当前处理后图像的 RGB 通道平均亮度
-    QImage sampleSrc = !Original_map.isNull() ? Original_map.toImage() : _document.sourceImage();
+    QImage sampleSrc = ui->label->PreviewImage();
+    if (sampleSrc.isNull()) sampleSrc = _document.sourceImage();
     QImage small = sampleSrc.scaled(64, 64, Qt::IgnoreAspectRatio, Qt::FastTransformation)
                        .convertToFormat(QImage::Format_RGB32);
     qint64 sumR = 0, sumG = 0, sumB = 0;
@@ -511,7 +438,7 @@ void PicShow::Clear()
     _parameter_dragging = false;
     _undo_stack->clear();
     _document.clear();
-    Original_map = QPixmap();
+    ui->label->SetFrame({}, {}, {}, false, 0);
     _document.setParameters({});
     SyncControlsFromDocument();
     ResetViewFit();
@@ -549,158 +476,6 @@ bool PicShow::event(QEvent *event)
     return QDialog::event(event);
 }
 
-// 事件过滤器：接管 ui->label 的 Paint、滚轮缩放、鼠标拖拽平移、双击切换事件
-bool PicShow::eventFilter(QObject *watched, QEvent *event)
-{
-    if (watched == ui->label)
-    {
-        if (_show_original && event->type() != QEvent::Paint)
-            return QDialog::eventFilter(watched, event);
-        if (event->type() == QEvent::Wheel && !Original_map.isNull())
-        {
-            QWheelEvent *wheelEvent = static_cast<QWheelEvent*>(event);
-            const int delta = wheelEvent->angleDelta().y();
-            if (delta != 0)
-            {
-                const double factor = (delta > 0) ? 1.15 : (1.0 / 1.15);
-                const double oldZoom = _zoom_factor;
-                _zoom_factor = qBound(0.1, _zoom_factor * factor, 8.0);
-                _is_actual_pixel = false;
-
-                // 以鼠标光标所在点为中心平滑缩放平移偏移
-                const QPointF cursorPos = wheelEvent->position();
-                const QPointF labelCenter(ui->label->width() / 2.0, ui->label->height() / 2.0);
-                const QPointF relCursor = cursorPos - labelCenter - _pan_offset;
-                _pan_offset -= relCursor * ((_zoom_factor / oldZoom) - 1.0);
-
-                if (_btn_zoom_reset)
-                {
-                    _btn_zoom_reset->setText(QString("%1%").arg(qRound(_zoom_factor * 100)));
-                }
-                ReloadPic();
-                return true;
-            }
-        }
-        else if (event->type() == QEvent::MouseButtonPress && !Original_map.isNull())
-        {
-            this->setFocus();
-            QMouseEvent *mouseEvent = static_cast<QMouseEvent*>(event);
-            if (mouseEvent->button() == Qt::LeftButton)
-            {
-                _is_dragging = true;
-                _drag_last_pos = mouseEvent->pos();
-                ui->label->setCursor(Qt::ClosedHandCursor);
-                return true;
-            }
-        }
-        else if (event->type() == QEvent::MouseMove && _is_dragging)
-        {
-            QMouseEvent *mouseEvent = static_cast<QMouseEvent*>(event);
-            QPoint delta = mouseEvent->pos() - _drag_last_pos;
-            _drag_last_pos = mouseEvent->pos();
-            _pan_offset += QPointF(delta.x(), delta.y());
-            ReloadPic();
-            return true;
-        }
-        else if (event->type() == QEvent::MouseButtonRelease && _is_dragging)
-        {
-            QMouseEvent *mouseEvent = static_cast<QMouseEvent*>(event);
-            if (mouseEvent->button() == Qt::LeftButton)
-            {
-                _is_dragging = false;
-                ui->label->setCursor(Qt::ArrowCursor);
-                return true;
-            }
-        }
-        else if (event->type() == QEvent::MouseButtonDblClick && !Original_map.isNull())
-        {
-            if (_is_actual_pixel || qAbs(_zoom_factor - 1.0) > 0.01 || !_pan_offset.isNull())
-            {
-                SlotZoomFit();
-            }
-            else
-            {
-                SlotZoomActual();
-            }
-            return true;
-        }
-        else if (event->type() == QEvent::Paint)
-        {
-            QPainter painter(ui->label);
-            painter.setRenderHint(QPainter::Antialiasing, true);
-            painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-
-            // 若当前未加载图片，绘制空状态引导提示
-            if (Original_map.isNull() || ui->label->width() <= 0 || ui->label->height() <= 0)
-            {
-                painter.setPen(QColor(135, 140, 148));
-                QFont f = painter.font();
-                f.setPointSize(11);
-                painter.setFont(f);
-                painter.drawText(ui->label->rect(), Qt::AlignCenter,
-                                 tr("🖼️ 暂无展示图片\n\n单击或双击左侧相册目录中的照片，或使用 Ctrl+O 打开项目开始浏览"));
-                return true;
-            }
-
-            const QSize displaySize = _show_original ? _document.sourceImage().size() : _document.outputSize();
-            const int fullW = displaySize.width();
-            const int fullH = displaySize.height();
-
-            // 基于未损耗的高清原图尺寸计算等比例适应 label 尺寸的基准绘制大小
-            QSize base_size = QSize(fullW, fullH).scaled(ui->label->size(), Qt::KeepAspectRatio);
-            QSizeF target_size;
-            if (_show_original)
-            {
-                target_size = QSizeF(base_size);
-            }
-            else if (_is_actual_pixel)
-            {
-                target_size = QSizeF(fullW, fullH);
-            }
-            else
-            {
-                target_size = QSizeF(base_size) * _zoom_factor;
-            }
-
-            // 计算居中叠加鼠标拖拽平移后的目标矩形区域
-            const QPointF displayPan = _show_original ? QPointF() : _pan_offset;
-            double x = (ui->label->width() - target_size.width()) / 2.0 + displayPan.x();
-            double y = (ui->label->height() - target_size.height()) / 2.0 + displayPan.y();
-            QRectF target_rect(x, y, target_size.width(), target_size.height());
-
-            // 将高清原图绘制到目标矩形区域中
-            if (_show_original)
-                painter.drawImage(target_rect, _document.sourceImage());
-            else
-                painter.drawPixmap(target_rect.toRect(), Original_map);
-
-            // 左上角绘制半透明 HUD 状态胶囊（显示当前缩放倍率、像素尺寸与旋转角度）
-            QString hudText = QString(" %1  |  %2 × %3 px ")
-                                  .arg(_show_original ? tr("原图对比 · 自适应") : (_is_actual_pixel ? "1:1 原图" : QString("%1%").arg(qRound(_zoom_factor * 100))))
-                                  .arg(fullW)
-                                  .arg(fullH);
-            if (_document.isModified()) hudText += tr(" | 已修改 ");
-            if (!_show_original && _document.state().rotation != 0)
-            {
-                hudText += QString(" | 旋转 %1° ").arg(_document.state().rotation);
-            }
-            QFont hudFont = painter.font();
-            hudFont.setPointSize(9);
-            painter.setFont(hudFont);
-            QRect fmRect = painter.fontMetrics().boundingRect(hudText);
-            QRect hudBox(12, 12, fmRect.width() + 16, fmRect.height() + 10);
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(QColor(25, 27, 30, 175));
-            painter.drawRoundedRect(hudBox, 6, 6);
-            painter.setPen(QColor(225, 228, 232));
-            painter.drawText(hudBox, Qt::AlignCenter, hudText);
-
-            return true; // 返回 true 表示已完全处理绘制事件，无需 label 默认绘制
-        }
-    }
-    return QDialog::eventFilter(watched, event);
-}
-
 void PicShow::keyPressEvent(QKeyEvent *event)
 {
     if (event->key() == Qt::Key_Left)
@@ -720,46 +495,22 @@ void PicShow::keyPressEvent(QKeyEvent *event)
 
 void PicShow::SlotZoomIn()
 {
-    if (Original_map.isNull()) return;
-    _is_actual_pixel = false;
-    _zoom_factor = qBound(0.1, _zoom_factor * 1.2, 8.0);
-    if (_btn_zoom_reset)
-        _btn_zoom_reset->setText(QString("%1%").arg(qRound(_zoom_factor * 100)));
-    ReloadPic();
+    ui->label->ZoomIn();
 }
 
 void PicShow::SlotZoomOut()
 {
-    if (Original_map.isNull()) return;
-    _is_actual_pixel = false;
-    _zoom_factor = qBound(0.1, _zoom_factor / 1.2, 8.0);
-    if (_btn_zoom_reset)
-        _btn_zoom_reset->setText(QString("%1%").arg(qRound(_zoom_factor * 100)));
-    ReloadPic();
+    ui->label->ZoomOut();
 }
 
 void PicShow::SlotZoomFit()
 {
-    ResetViewFit();
-    ReloadPic();
+    ui->label->ZoomFit();
 }
 
 void PicShow::SlotZoomActual()
 {
-    if (Original_map.isNull()) return;
-    _is_actual_pixel = true;
-    _pan_offset = QPointF(0.0, 0.0);
-    if (ui && ui->label && ui->label->width() > 0 && ui->label->height() > 0)
-    {
-        QSize base_size = Original_map.size().scaled(ui->label->size(), Qt::KeepAspectRatio);
-        if (base_size.width() > 0)
-        {
-            _zoom_factor = qBound(0.1, static_cast<double>(Original_map.width()) / base_size.width(), 8.0);
-        }
-    }
-    if (_btn_zoom_reset)
-        _btn_zoom_reset->setText("1:1 原图");
-    ReloadPic();
+    ui->label->ZoomActual();
 }
 
 void PicShow::SlotRotateLeft()
@@ -827,24 +578,7 @@ void PicShow::SlotAdjustParamsChanged()
 {
     if (_document.sourceImage().isNull()) { SyncControlsFromDocument(); return; }
     const auto before = _document.state();
-    ImageProcessor::Parameters parameters = _document.parameters();
-    if (_slider_bright)
-    {
-        parameters.brightness = _slider_bright->value();
-    }
-    if (_slider_contrast)
-    {
-        parameters.contrast = _slider_contrast->value();
-    }
-    if (_slider_sat)
-    {
-        parameters.saturation = _slider_sat->value();
-    }
-    if (_combo_filter)
-    {
-        parameters.filter = static_cast<ImageProcessor::FilterType>
-            (_combo_filter->currentData().toInt());
-    }
+    const auto parameters = _adjustments->Parameters();
     if (!_parameter_dragging) {
         auto after = before;
         after.parameters = parameters;
@@ -1080,26 +814,7 @@ void PicShow::SyncControlsFromDocument()
     if (_save_material_button) _save_material_button->setEnabled(!_document.sourceImage().isNull() && !_document.state().crop.isEmpty());
     setProperty("photoModified", _document.isModified());
     setWindowTitle(_document.isModified() ? tr("照片编辑 * 已修改") : tr("照片编辑"));
-    const auto parameters = _document.parameters();
-    if (_slider_bright) {
-        const QSignalBlocker blocker(_slider_bright);
-        _slider_bright->setValue(parameters.brightness);
-    }
-    if (_slider_contrast) {
-        const QSignalBlocker blocker(_slider_contrast);
-        _slider_contrast->setValue(parameters.contrast);
-    }
-    if (_slider_sat) {
-        const QSignalBlocker blocker(_slider_sat);
-        _slider_sat->setValue(parameters.saturation);
-    }
-    if (_combo_filter) {
-        const QSignalBlocker blocker(_combo_filter);
-        _combo_filter->setCurrentIndex(_combo_filter->findData(parameters.filter));
-    }
-    if (_lbl_bright_val) _lbl_bright_val->setText(QString::number(parameters.brightness));
-    if (_lbl_contrast_val) _lbl_contrast_val->setText(QString::number(parameters.contrast));
-    if (_lbl_sat_val) _lbl_sat_val->setText(QString::number(parameters.saturation));
+    _adjustments->SetParameters(_document.parameters());
 }
 
 void PicShow::ApplyEditState(const PhotoEditDocument::EditState &state)
@@ -1156,11 +871,8 @@ void PicShow::SlotCrop()
 
 void PicShow::SetOriginalComparison(bool enabled)
 {
-    const bool show = enabled && !_document.sourceImage().isNull();
-    if (_show_original == show) return;
-    _show_original = show;
-    if (!show && _compare_button) _compare_button->setDown(false);
-    ReloadPic();
+    ui->label->SetOriginalComparison(enabled);
+    if (!ui->label->IsComparing() && _compare_button) _compare_button->setDown(false);
 }
 
 void PicShow::SlotSaveMaterial()

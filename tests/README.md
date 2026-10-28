@@ -4,6 +4,39 @@ Configure with `-DALBUM_BUILD_FEATURE_TESTS=ON`, build, then run
 `ctest --test-dir build-msvc --output-on-failure` in your Qt/MSVC environment.
 The option defaults to OFF for normal application builds.
 
+Second-round component checks instantiate PhotoCanvas and PhotoAdjustmentPanel
+without PicShow. Panel checks verify silent parameter backfill/reset, live value
+labels, and one start/end pair per gesture. Canvas checks verify wheel zoom, left
+drag panning, full-output-size 1:1 zoom with a reduced preview, source comparison
+and exact view restoration, immutable source pixels, focus-loss drag recovery,
+hide/clear comparison cleanup, and stale-preview removal. Existing integrated
+editor checks retain slider gesture grouping, shortcuts with slider focus, pixels,
+crop/geometry, undo/redo, original comparison, reset/load/clear and export behavior.
+The UI embeds PhotoCanvas through Qt Designer promotion while retaining the label
+object name. An explicit output directory retains editor-components.png.
+
+Manual component acceptance: open a photo, drag each slider and undo once, change
+filters and undo/redo with slider focus, zoom with the toolbar and mouse wheel,
+pan with left drag, double-click to toggle fit/actual pixels, hold/release original
+comparison after edits and panning, then switch/clear/reopen photos. Check the
+side panel and canvas at normal and 200% display scaling and after losing focus.
+
+Responsibility-refactoring checks exercise MaterialImportService without any tree
+or editor: direct in-album files, external copying, identical-content reuse, naming
+collisions, invalid image/root, and a file blocking the material directory. Integrated
+duplicate-review checks cover grouping within albums, report cancellation, disabling
+cleanup without checked paths, shared recycle confirmation, dirty-editor cancellation,
+locked-file failure, and successful cleanup with viewer/history/navigation/wall
+synchronization. Retained screenshot: duplicate-review-dialog.png. The report owns
+only value data and selected paths; AlbumDeletionController coordinates the same
+recycling workflow used by tree and wall requests. Duplicate cleanup now recycles
+files instead of permanently removing them.
+
+Manual acceptance: open an album with two identical test photos, run duplicate
+detection, change the checked rows, cancel the report or deletion confirmation,
+then edit a duplicate and repeat to check the edit-protection choices. Confirm
+recycling, reopen the album, then restore the test file through Windows Recycle Bin.
+
 Material saving checks cover numbered PNG paths, two independent crop regions,
 color/alpha pixels, cancel, declined replacement, failed writing, source and history
 preservation, optional album notifications, integrated album context and photo-wall
@@ -86,6 +119,12 @@ Coverage includes gallery selection order, filtering/deletion, empty albums,
 thumbnail cancellation/destruction, tree search/favorites and viewer navigation;
 PDF layouts, Chinese captions, portrait/landscape images, cancellation, failed
 reads, invalid destinations, atomic replacement and source overwrite protection.
+
+AlbumLoadController checks exercise queued reentrant album opening, duplicate
+open suppression, self-import rejection, successful and repeated import,
+cancelled-import rollback, cancelled-open cleanup, and reopening after cancel.
+Temporary fixtures are used; these checks do not replace native folder-dialog
+or real mouse acceptance.
 
 Integration tests compile a tree implementation copy with a separate
 `AlbumFeatureTests` QSettings organization, preserving real user preferences.

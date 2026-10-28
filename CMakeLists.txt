@@ -45,6 +45,12 @@ qt_add_executable(Album
     imageprocessor.h imageprocessor.cpp
     imageexportservice.h imageexportservice.cpp
     materialsavedialog.h materialsavedialog.cpp
+    materialimportservice.h materialimportservice.cpp
+    albumdeletioncontroller.h albumdeletioncontroller.cpp
+    albumloadcontroller.h albumloadcontroller.cpp
+    duplicatereviewdialog.h duplicatereviewdialog.cpp
+    photocanvas.h photocanvas.cpp
+    photoadjustmentpanel.h photoadjustmentpanel.cpp
     phototrashservice.h phototrashservice.cpp
     musiccontroller.h musiccontroller.cpp
     musicsettingsdialog.h musicsettingsdialog.cpp

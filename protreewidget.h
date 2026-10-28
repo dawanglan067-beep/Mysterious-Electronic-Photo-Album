@@ -3,12 +3,10 @@
 #include<QSet>
 #include <QTreeWidget>
 #include<QAction>
-#include<QProgressDialog>
-#include"protreethread.h"
-#include"opentreethread.h"
 #include "musiccontroller.h"
 #include "photoentry.h"
 class SlideShowDlg;
+class AlbumLoadController;
 class ProTreeWidget : public QTreeWidget
 {
     Q_OBJECT
@@ -36,12 +34,7 @@ private:
     QAction*_action_setstart;
     QAction*_action_closepro;
     QAction*_action_slideshow;
-    QProgressDialog*_dialog_progress;
-    QProgressDialog*_open_progressdlg;
-    std::shared_ptr<ProTreeThread> _thread_create_pro;
-    std::shared_ptr<OpenTreeThread> _thread_open_pro;
-    bool _opening_projects = false;
-    QStringList _pending_open_paths;
+    AlbumLoadController *_load_controller;
     QString _restoring_active_path;
     std::shared_ptr<SlideShowDlg>_slide_show_dlg;
     MusicController *_music;
@@ -88,13 +81,8 @@ private slots:
     void SlotImport();
     void SlotSetAvtive();
     void SlotColsePro();
-    void SlotUpdateProgress(int count);
-    void SlotFinishProgress();
-    void SlotCancelProgress();
-
-    void SlotUpOpenProgress(int count);
-    void SlotFinishOpenProgress();
-    void SlotCancelOpenProgress();
+    void OnImportCompleted();
+    void OnAlbumOpened(QTreeWidgetItem *root);
     void SlotSlideShow();
     void SlotToggleFavorite();
 public slots:
@@ -117,8 +105,6 @@ signals:
     void SigPhotoSetChanged();
     void SigDeletePhotosRequested(const QStringList &paths);
     void SigDeleteFolderRequested(const QString &path);
-    void SigCancelProgress();
-    void SigCancelOpenProgress();
     void SigUpdateSelected(const QString &);
     void SigUpdatePic(const QString &);
     void SigMusicStateChanged(bool isPlaying);

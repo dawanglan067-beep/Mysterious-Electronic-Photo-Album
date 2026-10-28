@@ -4,21 +4,29 @@
 #include "thumbnailloader.h"
 #include "mainwindow.h"
 #include "protreewidget.h"
+#include "albumloadcontroller.h"
 #include "protreeitem.h"
 #include "picshow.h"
 #include "cropdialog.h"
 #include <QDialogButtonBox>
 #include <QWheelEvent>
+#include <QFocusEvent>
 #include <QTransform>
 #include "imageprocessor.h"
 #include "imageexportservice.h"
 #include "materialsavedialog.h"
 #include "phototrashservice.h"
+#include "materialimportservice.h"
+#include "duplicatereviewdialog.h"
+#include "photocanvas.h"
+#include "photoadjustmentpanel.h"
+#include <QListWidget>
 #ifdef Q_OS_WIN
 #include <QtCore/qt_windows.h>
 #endif
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QProgressDialog>
 #include <QFileDialog>
 #include "duplicatephotofinder.h"
 #include "workspacesettings.h"
@@ -95,6 +103,250 @@ int main(int argc, char **argv)
     check(temporary.isValid(), "temporary test directory");
     const QString outputDir = app.arguments().size() > 1 ? app.arguments().at(1) : temporary.path();
     QDir().mkpath(outputDir);
+    {
+        QTreeWidget tree;
+        AlbumLoadController loader(&tree);
+        const QString first = temporary.filePath("load-controller-first");
+        const QString second = temporary.filePath("load-controller-second");
+        const QString source = temporary.filePath("load-controller-source");
+        QDir().mkpath(first); QDir().mkpath(second); QDir().mkpath(source);
+        QImage sample(12, 9, QImage::Format_RGB32);
+        sample.fill(Qt::blue);
+        check(sample.save(first + "/existing.png") && sample.save(second + "/other.png")
+              && sample.save(source + "/imported.png"), "create load-controller fixtures");
+        QStringList opened;
+        QObject::connect(&loader, &AlbumLoadController::AlbumOpened, &tree, [&](QTreeWidgetItem *root) {
+            opened.append(dynamic_cast<ProTreeItem*>(root)->GetPath());
+            if (opened.size() == 1) loader.Open(second); // reentry must queue this album.
+        });
+        loader.Open(first);
+        check(opened.size() == 2 && tree.topLevelItemCount() == 2 && !loader.IsBusy(),
+              "load controller serializes reentrant album opening and transfers roots once");
+        loader.Open(first);
+        check(tree.topLevelItemCount() == 2 && opened.size() == 2,
+              "load controller ignores duplicate opened album");
+
+        auto *firstRoot = dynamic_cast<ProTreeItem*>(tree.topLevelItem(0));
+        QString error;
+        check(!loader.Import(first, firstRoot, &error) && !error.isEmpty()
+              && !QFileInfo::exists(first + "/load-controller-first"),
+              "load controller rejects importing album into itself");
+        check(loader.Import(source, firstRoot, &error) && error.isEmpty()
+              && QFileInfo::exists(first + "/imported.png") && firstRoot->childCount() == 2,
+              "load controller commits imported files and tree nodes together");
+        check(loader.Import(source, firstRoot, &error) && firstRoot->childCount() == 2,
+              "load controller repeated import does not duplicate nodes");
+
+        const QString cancelSource = temporary.filePath("load-controller-cancel-source");
+        QDir().mkpath(cancelSource);
+        for (int i = 0; i < 250; ++i)
+            sample.save(cancelSource + QStringLiteral("/cancel_%1.png").arg(i));
+        QTimer::singleShot(0, &tree, [&]() {
+            if (auto *dialog = tree.findChild<QProgressDialog*>("albumLoadProgress")) dialog->reject();
+        });
+        check(!loader.Import(cancelSource, firstRoot, &error) && firstRoot->childCount() == 2
+              && QDir(first).entryList({"cancel_*.png"}, QDir::Files).isEmpty() && !loader.IsBusy(),
+              "load controller cancellation rolls back new files without changing existing album");
+        QTimer::singleShot(0, &tree, [&]() {
+            if (auto *dialog = tree.findChild<QProgressDialog*>("albumLoadProgress")) dialog->reject();
+        });
+        loader.Open(cancelSource);
+        check(tree.topLevelItemCount() == 2 && !loader.IsBusy(),
+              "canceled album scan leaves no partial root or busy state");
+        loader.Open(cancelSource);
+        check(tree.topLevelItemCount() == 3 && tree.topLevelItem(2)->childCount() == 250,
+              "album can reopen fully after canceled scan");
+    }
+    {
+        PhotoAdjustmentPanel panel;
+        panel.resize(268,180); panel.show();
+        int changes = 0, starts = 0, finishes = 0;
+        QObject::connect(&panel,&PhotoAdjustmentPanel::SigParametersChanged,&panel,[&]() { ++changes; });
+        QObject::connect(&panel,&PhotoAdjustmentPanel::SigGestureStarted,&panel,[&]() { ++starts; });
+        QObject::connect(&panel,&PhotoAdjustmentPanel::SigGestureFinished,&panel,[&]() { ++finishes; });
+        ImageProcessor::Parameters parameters;
+        parameters.brightness = 21; parameters.contrast = -12; parameters.saturation = 35;
+        parameters.filter = ImageProcessor::FilterSepia;
+        panel.SetParameters(parameters);
+        auto current = panel.Parameters();
+        check(changes == 0 && current.brightness == 21 && current.contrast == -12
+              && current.saturation == 35 && current.filter == ImageProcessor::FilterSepia,
+              "standalone adjustment panel synchronizes controls without emitting edit requests");
+        auto *slider = panel.findChildren<QSlider*>().first();
+        slider->setSliderDown(true); slider->setValue(22); slider->setValue(23);
+        check(panel.IsSliderDown() && changes == 2 && starts == 1 && finishes == 0,
+              "adjustment panel emits live values and one gesture start");
+        slider->setSliderDown(false);
+        bool updatedLabel = false;
+        for (auto *label : panel.findChildren<QLabel*>()) updatedLabel |= label->text() == "23";
+        check(!panel.IsSliderDown() && finishes == 1 && updatedLabel && panel.Parameters().brightness == 23,
+              "adjustment panel owns value labels and reports gesture end without document or history");
+        panel.SetParameters({});
+        check(changes == 2 && panel.Parameters().brightness == 0 && panel.Parameters().filter == ImageProcessor::FilterNone,
+              "panel programmatic reset does not create extra history requests");
+    }
+    {
+        PhotoCanvas canvas; canvas.resize(240,160); canvas.show(); app.processEvents();
+        QImage source(480,320,QImage::Format_RGB32);
+        for (int y = 0; y < source.height(); ++y) for (int x = 0; x < source.width(); ++x)
+            source.setPixelColor(x,y,QColor(x % 256,y % 256,(x+y) % 256));
+        QImage edited = source; edited.invertPixels();
+        const QImage originalPixels = source;
+        QString zoomText;
+        QObject::connect(&canvas,&PhotoCanvas::SigZoomTextChanged,&canvas,[&](const QString &text) { zoomText = text; });
+        canvas.SetFrame(source,edited.scaled(120,80),source.size(),true,90);
+        canvas.ZoomActual(); canvas.ZoomIn();
+        check(zoomText == "240%", "canvas actual-pixel zoom uses full output size despite reduced preview cache");
+        canvas.ZoomFit();
+        QWheelEvent wheel(QPointF(180,110),canvas.mapToGlobal(QPoint(180,110)),QPoint(),QPoint(0,120),
+                          Qt::NoButton,Qt::NoModifier,Qt::NoScrollPhase,false);
+        QApplication::sendEvent(&canvas,&wheel);
+        check(zoomText == "115%", "standalone canvas wheel updates zoom without editor state");
+        const auto beforePan = canvas.grab().toImage();
+        const auto mouse = [&](QEvent::Type type,const QPointF &point,Qt::MouseButton button,Qt::MouseButtons held) {
+            QMouseEvent event(type,point,canvas.mapToGlobal(point.toPoint()),button,held,Qt::NoModifier);
+            QApplication::sendEvent(&canvas,&event);
+        };
+        mouse(QEvent::MouseButtonPress,QPointF(100,100),Qt::LeftButton,Qt::LeftButton);
+        mouse(QEvent::MouseMove,QPointF(130,115),Qt::NoButton,Qt::LeftButton);
+        mouse(QEvent::MouseButtonRelease,QPointF(130,115),Qt::LeftButton,Qt::NoButton);
+        const auto panned = canvas.grab().toImage();
+        check(panned != beforePan && canvas.cursor().shape() == Qt::ArrowCursor,
+              "standalone canvas left drag pans cached pixels and releases cursor");
+        canvas.SetOriginalComparison(true);
+        check(canvas.IsComparing() && canvas.grab().toImage() != panned,
+              "canvas comparison fits full source independently of panned edited view");
+        canvas.SetOriginalComparison(false);
+        check(canvas.grab().toImage() == panned && source == originalPixels,
+              "canvas comparison release restores view and never mutates source pixels");
+        mouse(QEvent::MouseButtonPress,QPointF(100,100),Qt::LeftButton,Qt::LeftButton);
+        QFocusEvent focusOut(QEvent::FocusOut); QApplication::sendEvent(&canvas,&focusOut);
+        mouse(QEvent::MouseMove,QPointF(160,120),Qt::NoButton,Qt::NoButton);
+        check(canvas.grab().toImage() == panned && canvas.cursor().shape() == Qt::ArrowCursor,
+              "canvas focus loss ends drag without changing view or requiring mouse release");
+        canvas.SetOriginalComparison(true); canvas.hide();
+        check(!canvas.IsComparing(), "standalone canvas hide ends original comparison");
+        canvas.show(); canvas.SetFrame({}, {}, {}, false, 0);
+        canvas.SetOriginalComparison(true);
+        check(!canvas.IsComparing() && canvas.PreviewImage().isNull(), "clearing canvas removes comparison and stale preview");
+    }
+    {
+        const QString album = temporary.filePath("service-only-album"); QDir().mkpath(album);
+        const QString external = temporary.filePath("service-material.png");
+        QImage image(32,24,QImage::Format_ARGB32); image.fill(QColor(20,40,60,110)); image.save(external);
+        const auto bytes = readFile(external);
+        const auto first = MaterialImportService::prepare(external,album);
+        const auto repeated = MaterialImportService::prepare(external,album);
+        check(first.success && first.albumPath == repeated.albumPath && readFile(first.albumPath) == bytes,
+              "material service copies and deduplicates without tree or editor");
+        image.fill(Qt::red); image.save(external);
+        const auto changed = MaterialImportService::prepare(external,album);
+        check(changed.success && changed.albumPath != first.albumPath && readFile(first.albumPath) == bytes
+              && readFile(changed.albumPath) == readFile(external),
+              "material service avoids name collision without overwriting earlier copy");
+        const auto local = MaterialImportService::prepare(first.albumPath,album);
+        check(local.success && local.albumPath == first.albumPath,
+              "material service returns existing album file without extra copy");
+        QFile invalid(temporary.filePath("invalid-material.png")); invalid.open(QIODevice::WriteOnly);
+        invalid.write("not an image"); invalid.close();
+        check(!MaterialImportService::prepare(invalid.fileName(),album).success
+              && !MaterialImportService::prepare(external,temporary.filePath("missing-album")).success
+              && readFile(first.albumPath) == bytes,
+              "material service rejects invalid input while preserving previous material");
+        const QString blockedAlbum = temporary.filePath("blocked-material-album"); QDir().mkpath(blockedAlbum);
+        QFile blocked(blockedAlbum + QStringLiteral("/素材")); blocked.open(QIODevice::WriteOnly);
+        blocked.write("occupied"); blocked.close();
+        check(!MaterialImportService::prepare(external,blockedAlbum).success && readFile(blocked.fileName()) == "occupied",
+              "material service handles unavailable target folder without replacing file");
+    }
+    {
+        QSettings isolated("AlbumFeatureTests","AlbumApp"); isolated.clear();
+        const QString album = temporary.filePath("duplicate-review-album"); QDir().mkpath(album);
+        const QString otherAlbum = temporary.filePath("duplicate-other-album"); QDir().mkpath(otherAlbum);
+        QImage image(64,48,QImage::Format_RGB32); image.fill(Qt::cyan);
+        const QString keep = album + "/a.png", duplicate = album + "/b.png", other = otherAlbum + "/c.png";
+        image.save(keep); image.save(duplicate); image.save(other);
+        const auto original = readFile(keep);
+        MainWindow window; window.resize(1280,800); window.show();
+        auto *tree = window.findChild<ProTreeWidget*>();
+        auto *wall = window.findChild<PhotoWallWidget*>();
+        auto *editor = window.findChild<PicShow*>();
+        auto *root = new ProTreeItem(tree,"duplicates",album,TreeItemPro);
+        new ProTreeItem(tree,"other album",otherAlbum,TreeItemPro);
+        tree->setCurrentItem(root);
+        QString registered,error;
+        check(tree->RegisterMaterial(album,keep,&registered,&error)
+              && tree->RegisterMaterial(album,duplicate,&registered,&error)
+              && tree->RegisterMaterial(otherAlbum,other,&registered,&error), "register duplicate review integration fixtures");
+        tree->SelectPhotoByPath(duplicate); app.processEvents();
+        editor->findChildren<QSlider*>().first()->setValue(25);
+        auto *history = editor->findChild<QUndoStack*>();
+        const int historyIndex = history->index();
+        enum class ReviewChoice { Close, None, Delete };
+        ReviewChoice choice = ReviewChoice::Close;
+        bool confirm = false, discard = false, sawReport = false;
+        QTimer automation;
+        QObject::connect(&automation,&QTimer::timeout,&window,[&]() {
+            if (auto *review = qobject_cast<DuplicateReviewDialog*>(QApplication::activeModalWidget())) {
+                sawReport = true;
+                auto *list = review->findChild<QListWidget*>("duplicateReviewList");
+                check(list && list->count() == 1 && review->SelectedPaths() == QStringList{duplicate},
+                      "duplicate dialog owns path selection and excludes cross-album matches");
+                check(review->grab().save(outputDir + "/duplicate-review-dialog.png"), "duplicate review screenshot");
+                if (choice == ReviewChoice::Close) review->reject();
+                else {
+                    auto *deleteButton = review->findChild<QPushButton*>("duplicateTrashButton");
+                    if (choice == ReviewChoice::None) {
+                        list->item(0)->setCheckState(Qt::Unchecked);
+                        check(!deleteButton->isEnabled() && review->SelectedPaths().isEmpty(),
+                              "duplicate cleanup disabled without checked paths");
+                        review->reject();
+                    } else deleteButton->click();
+                }
+            } else if (auto *prompt = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) {
+                if (prompt->objectName() == "photoTrashConfirmation")
+                    prompt->button(confirm ? QMessageBox::Yes : QMessageBox::Cancel)->click();
+                else if (prompt->objectName() == "photoDeleteEditPrompt") {
+                    if (discard) prompt->findChild<QPushButton*>("deleteDiscardButton")->click();
+                    else prompt->button(QMessageBox::Cancel)->click();
+                } else {
+                    prompt->accept();
+                }
+            }
+        });
+        automation.start(10);
+        tree->SlotDetectDuplicates();
+        check(sawReport && QFileInfo::exists(duplicate) && history->index() == historyIndex,
+              "closing duplicate review preserves original file and edits");
+        choice = ReviewChoice::None; tree->SlotDetectDuplicates();
+        check(QFileInfo::exists(duplicate), "unchecked duplicate review cannot start deletion");
+        choice = ReviewChoice::Delete; tree->SlotDetectDuplicates();
+        confirm = true; tree->SlotDetectDuplicates();
+        check(QFileInfo::exists(duplicate) && tree->VisiblePhotos(album).size() == 2
+              && history->index() == historyIndex && editor->isModified(),
+              "duplicate cleanup shares deletion confirmation and dirty-editor cancellation");
+#ifdef Q_OS_WIN
+        const HANDLE locked = CreateFileW(reinterpret_cast<LPCWSTR>(duplicate.utf16()), GENERIC_READ,
+            FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+        check(locked != INVALID_HANDLE_VALUE, "lock duplicate against recycling");
+        if (locked != INVALID_HANDLE_VALUE) {
+            discard = true; tree->SlotDetectDuplicates();
+            check(QFileInfo::exists(duplicate) && tree->VisiblePhotos(album).size() == 2
+                  && history->index() == historyIndex && editor->isModified(),
+                  "duplicate recycle failure preserves node and unsaved edit history");
+            CloseHandle(locked);
+        }
+#endif
+        discard = true; tree->SlotDetectDuplicates(); automation.stop(); app.processEvents();
+        check(!QFileInfo::exists(duplicate) && readFile(keep) == original && readFile(other) == original
+              && tree->VisiblePhotos(album).size() == 1 && tree->VisiblePhotos(otherAlbum).size() == 1
+              && wall->findChild<QListView*>()->model()->rowCount() == 1
+              && editor->IsEditingPath(keep) && history->count() == 0,
+              "duplicate cleanup uses recycling coordinator and refreshes editor navigation and wall");
+        check(root->GetFirstPicChild() && !root->GetFirstPicChild()->GetNextItem(),
+              "duplicate cleanup uses shared navigation repair");
+        isolated.clear();
+    }
     {
         const QString album = temporary.filePath("trash-album");
         QDir().mkpath(album);
@@ -743,6 +995,9 @@ int main(int argc, char **argv)
         const auto sliders = viewer.findChildren<QSlider*>();
         auto *filter = viewer.findChild<QComboBox*>("studioCombo");
         check(canvas && sliders.size() == 3 && filter, "editor controls available");
+        check(viewer.findChild<PhotoCanvas*>("label") && viewer.findChild<PhotoAdjustmentPanel*>()
+              && viewer.grab().save(outputDir + "/editor-components.png"),
+              "editor embeds independent canvas and adjustment panel with retained screenshot");
         if (canvas && sliders.size() == 3 && filter) {
             const auto centerPixel = [&]() {
                 const QImage rendered = canvas->grab().toImage();
